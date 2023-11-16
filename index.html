@@ -70,16 +70,15 @@
     </script>
     <div class="container" id="main">
         <div class="row">
-                <!-- <div class="col-sm-6 col-sm-offset-3 text-center">
+                <div class="col-sm-6 col-sm-offset-3 text-center">
                     <ul class="nav nav-pills nav-justified">
                         <li>
-                            <a href="https://arxiv.org/abs/2112.03907">
-                            <img src="./img/paper_image.jpg" height="60px">
+                            <a href="./file/proposal.pdf">
                                 <h4><strong>Project Proposal</strong></h4>
                             </a>
                         </li>
                     </ul>
-                </div> -->
+                </div>
         </div>
 
 
@@ -134,7 +133,7 @@
                     A simplistic approach to parallelizing path tracing with CUDA or SIMD involves creating "megakernels" or "ray packets" that process an entire light path from beginning to end. However, this method faces challenges as rays in different threads might end at various points, encounter diverse object types, or interact with objects using different shaders. This can cause significant divergence within GPU warps since each thread might execute distinct instructions, leading to idle threads and low warp utilization. Additionally, when accessing acceleration structures like Bounding Volume Hierarchies (BVHs), the divergence in ray paths can adversely affect cache coherence.
                 </div> <br>
                 <div class="text-justify">
-                    In contrast, wavefront path tracing divides the process into several smaller kernels. Each kernel either advances the path to the next kernel, or terminates it. This allows opportunities to sort the rays by their origins, directions, hit surface types, or other properties, and compact the thread blocks when some rays terminate early, so that we can achieve better execution coherence. Smaller kernels also allow pipelining (streaming) and finer-scale work queueing, where we may get better work balancing. The idea is described in @laine2013megakernels in detail.
+                    In contrast, wavefront path tracing divides the process into several smaller kernels. Each kernel either advances the path to the next kernel, or terminates it. This allows opportunities to sort the rays by their origins, directions, hit surface types, or other properties, and compact the thread blocks when some rays terminate early, so that we can achieve better execution coherence. Smaller kernels also allow pipelining (streaming) and finer-scale work queueing, where we may get better work balancing. The idea is described in [1] in detail.
                 </div> <br>
 
                 <div class="text-center">
@@ -167,7 +166,7 @@
                 </div> -->
                 <br>
                 <div class="text-justify">
-                    While @laine2013megakernels gives one possible formulation of wavefront path tracing, we would like to note that the design space for this method is huge, and there is a lot of performance tradeoffs depending on the actual workload charateristics. We will describe some of the major challenges.                </div>
+                    While [1] gives one possible formulation of wavefront path tracing, we would like to note that the design space for this method is huge, and there is a lot of performance tradeoffs depending on the actual workload charateristics. We will describe some of the major challenges.                </div>
 
                 <h4>
                     Execution Divergence
@@ -192,7 +191,7 @@
                     Synchronization and Orchestration Overhead
                 </h4>
                 <div class="text-justify">
-                    There are multiple ways to implement and orchestrate the wavefront design. Apart from the one shown in @wavefront using work queues, we may also launch the kernels in each stage only after all work has been generated, which is simpler and reduces overhead in work fetching, but has higher overhead in launching threads. Alternatively, we can pipeline all the stages, or even stream data between them, which requires us to think about how to synchronize stages.
+                    There are multiple ways to implement and orchestrate the wavefront design. Apart from the one shown in the diagram using work queues, we may also launch the kernels in each stage only after all work has been generated, which is simpler and reduces overhead in work fetching, but has higher overhead in launching threads. Alternatively, we can pipeline all the stages, or even stream data between them, which requires us to think about how to synchronize stages.
                 </div>
                 <br>
                 <div class="text-justify">
@@ -227,7 +226,7 @@
                 <div class="text-justify">
                     We plan to use the GHC machines with RTX 2080Ti as our main platform of development and experimentation. We will likely start with an existing pure CPU-based path tracing codebase (e.g., 
                     <a href="https://github.com/CMU-Graphics/Scotty3D">Scotty3D</a>, <a href="https://github.com/wjakob/nori">Nori</a>, 
-                    and <a href="https://github.com/xelatihy/yocto-gl">Yocto/GL</a>), and adapt it to CUDA, so that we can reuse the scene I/O and user inferfaces, and spend most of our time implementing the wavefront pipeline. We will use the design in @laine2013megakernels and @keller2017iray as a reference, but we almost surely will explore and choose different designs and implementations.
+                    and <a href="https://github.com/xelatihy/yocto-gl">Yocto/GL</a>), and adapt it to CUDA, so that we can reuse the scene I/O and user inferfaces, and spend most of our time implementing the wavefront pipeline. We will use the design in [1] and [2] as a reference, but we almost surely will explore and choose different designs and implementations.
                 </div>
 			</div>
         </div>
@@ -244,7 +243,7 @@
                 <div class="text-justify">
                 <ul>
                     <li>Implement two path tracers in CUDA using wavefront design and megakernel design, respectively. </li>
-                    <li>Compare their performance and analyze how our wavefront design alleviate execution divergence, and how that affects the final performance. We target a speedup over 1.3x in simple scenes, and over 2x in more complex scenes, based on the results in @laine2013megakernels.</li>
+                    <li>Compare their performance and analyze how our wavefront design alleviate execution divergence, and how that affects the final performance. We target a speedup over 1.3x in simple scenes, and over 2x in more complex scenes, based on the results in [1].</li>
                     <li>Test under multiple scenes with different configurations to analyze when wavefront path tracing benefits the most.</li>
                     <li>Experiment with some basic ray sorting and work queueing methods and analyze and performance and tradeoffs.</li>
                 </ul>
@@ -352,10 +351,10 @@
                 </h3>
                 <p class="text-justify">
                     [1] S. Laine, T. Karras, and T. Aila, “Megakernels considered harmful: Wavefront path tracing on
-                    GPUs”, Proceedings of the 5th High-Performance Graphics Conference, pp. 137–143, 2013.
+                    GPUs”, <i>Proceedings of the 5th High-Performance Graphics Conference</i>, pp. 137–143, 2013.
                     <br>
-                    [2] A. Keller et al., “The iray light transport simulation and rendering system”, ACM SIGGRAPH 2017
-                    Talks, pp. 1–2, 2017.
+                    [2] A. Keller <i>et al.</i>, “The iray light transport simulation and rendering system”, <i>ACM SIGGRAPH 2017
+                    Talks</i>, pp. 1–2, 2017.
                 </p>
             </div>
         </div>
