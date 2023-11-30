@@ -17,6 +17,15 @@ Main demo:
 - `apps/ycutrace.cpp`: offline and interactive scene rendering with CUDA
 
 
+## TODO
+Before milestone: Adapt the CPU/OptiX version to pure CUDA, using megakernel design.
+
+- [ ] Modify the CUDA BVH intersection part (currently using OptiX internal implementation). Adapt from the CPU version.
+- [ ] Remove all the OptiX configuration code.
+- [ ] Add our own CUDA entry kernel and host-side dispatch code.
+- [ ] (Maybe?) Optimize CUDA device functions.
+
+
 ## Compilation
 
 This library requires a C++17 compiler and is know to compiled on
