@@ -1,0 +1,180 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 22,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "release",
+      "description": "Release build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "YOCTO_APPS": "ON",
+        "YOCTO_EMBREE": "ON",
+        "YOCTO_DENOISE": "ON",
+        "YOCTO_OPENGL": "ON",
+        "YOCTO_CUDA": "OFF"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "debug",
+      "description": "Debug build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "YOCTO_APPS": "ON",
+        "YOCTO_EMBREE": "ON",
+        "YOCTO_DENOISE": "ON",
+        "YOCTO_OPENGL": "ON",
+        "YOCTO_CUDA": "OFF"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "release-nodep",
+      "description": "Release build - no dependencies",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "YOCTO_APPS": "ON",
+        "YOCTO_EMBREE": "OFF",
+        "YOCTO_DENOISE": "OFF",
+        "YOCTO_OPENGL": "ON",
+        "YOCTO_CUDA": "OFF"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "debug-nodep",
+      "description": "Debug build - no dependencies",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "YOCTO_APPS": "ON",
+        "YOCTO_EMBREE": "OFF",
+        "YOCTO_DENOISE": "OFF",
+        "YOCTO_OPENGL": "ON",
+        "YOCTO_CUDA": "OFF"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "release-nogl",
+      "description": "Release build - no OpenGL",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "YOCTO_APPS": "ON",
+        "YOCTO_EMBREE": "OFF",
+        "YOCTO_DENOISE": "OFF",
+        "YOCTO_OPENGL": "OFF",
+        "YOCTO_CUDA": "OFF"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "debug-nogl",
+      "description": "Debug build - no OpenGL",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "YOCTO_APPS": "ON",
+        "YOCTO_EMBREE": "OFF",
+        "YOCTO_DENOISE": "OFF",
+        "YOCTO_OPENGL": "OFF",
+        "YOCTO_CUDA": "OFF"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "release-cuda",
+      "description": "Release build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "YOCTO_APPS": "ON",
+        "YOCTO_EMBREE": "ON",
+        "YOCTO_DENOISE": "ON",
+        "YOCTO_OPENGL": "ON",
+        "YOCTO_CUDA": "ON"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "debug-cuda",
+      "description": "Debug build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "YOCTO_APPS": "ON",
+        "YOCTO_EMBREE": "ON",
+        "YOCTO_DENOISE": "ON",
+        "YOCTO_OPENGL": "ON",
+        "YOCTO_CUDA": "ON"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "release-nodep",
+      "configurePreset": "release-nodep"
+    },
+    {
+      "name": "debug-nodep",
+      "configurePreset": "debug-nodep"
+    },
+    {
+      "name": "release-cuda",
+      "configurePreset": "release-cuda"
+    },
+    {
+      "name": "debug-cuda",
+      "configurePreset": "debug-cuda"
+    }
+  ]
+}

@@ -1,0 +1,326 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "http://yocto-gl.com/scene.schema.json",
+  "title": "Yocto/GL Scene Format",
+  "description": "The scene format used by Yocto/GL",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "asset": {
+      "description": "asset information",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "description": "Version string",
+          "type": "string",
+          "enum": ["4.1", "4.2", "5.0"]
+        },
+        "copyright": {
+          "description": "Copyright string",
+          "type": "string"
+        },
+        "generator": {
+          "description": "Generator string",
+          "type": "string"
+        }
+      }
+    },
+    "cameras": {
+      "description": "Scene cameras",
+      "type": "array",
+      "items": {
+        "description": "Camera",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Name",
+            "type": "string"
+          },
+          "frame": {
+            "description": "Frame",
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "lens": {
+            "description": "Lens",
+            "type": "number"
+          },
+          "film": {
+            "description": "film size",
+            "type": "number"
+          },
+          "aspect": {
+            "description": "Aspect ratio",
+            "type": "number"
+          },
+          "focus": {
+            "description": "Focus distance",
+            "type": "number"
+          },
+          "aperture": {
+            "description": "Lens aperture",
+            "type": "number"
+          },
+          "orthographic": {
+            "description": "Whether the camera is orthographic",
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "textures": {
+      "description": "Scene textures",
+      "type": "array",
+      "items": {
+        "description": "Texture",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Name",
+            "type": "string"
+          },
+          "uri": {
+            "description": "Uri",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "shapes": {
+      "description": "Scene shapes",
+      "type": "array",
+      "items": {
+        "description": "Shape",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Name",
+            "type": "string"
+          },
+          "uri": {
+            "description": "Uri",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "materials": {
+      "description": "Scene materials",
+      "type": "array",
+      "items": {
+        "description": "Object",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Name",
+            "type": "string"
+          },
+          "type": {
+            "description": "Type",
+            "type": "string",
+            "enum": [
+              "matte",
+              "glossy",
+              "reflective",
+              "transparent",
+              "refractive",
+              "subsurface",
+              "volume",
+              "gltfpbr"
+            ]
+          },
+          "emission": {
+            "description": "Emission",
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "color": {
+            "description": "Color",
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "roughness": {
+            "description": "Roughness",
+            "type": "number"
+          },
+          "metallic": {
+            "description": "Metallic",
+            "type": "number"
+          },
+          "ior": {
+            "description": "Ior",
+            "type": "number"
+          },
+          "scattering": {
+            "description": "Volume scattering",
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "scanisotropy": {
+            "description": "Scattering anisotropy",
+            "type": "number"
+          },
+          "trdepth": {
+            "description": "Transmission depth",
+            "type": "number"
+          },
+          "opacity": {
+            "description": "Opacity",
+            "type": "number"
+          },
+          "displacement": {
+            "description": "Displacement",
+            "type": "integer"
+          },
+          "emission_tex": {
+            "description": "Emission map",
+            "type": "integer"
+          },
+          "color_tex": {
+            "description": "Color",
+            "type": "integer"
+          },
+          "roughness_tex": {
+            "description": "Roughness",
+            "type": "integer"
+          },
+          "metallic_tex": {
+            "description": "Metallic",
+            "type": "integer"
+          },
+          "scattering_tex": {
+            "description": "Volume scattering",
+            "type": "integer"
+          },
+          "displacement_tex": {
+            "description": "Displacement map",
+            "type": "integer"
+          },
+          "normal_tex": {
+            "description": "Normal map",
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "instances": {
+      "description": "Scene instances",
+      "type": "array",
+      "items": {
+        "description": "Instance",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Name",
+            "type": "string"
+          },
+          "frame": {
+            "description": "Frame",
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "shape": {
+            "description": "Shape index",
+            "type": "integer"
+          },
+          "material": {
+            "description": "Material index",
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "environments": {
+      "description": "Scene environments",
+      "type": "array",
+      "items": {
+        "description": "Environment",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Name",
+            "type": "string"
+          },
+          "frame": {
+            "description": "Frame",
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "emission": {
+            "description": "Emission",
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "emission_tex": {
+            "description": "Environment map index",
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "subdivs": {
+      "description": "Scene subdivs",
+      "type": "array",
+      "items": {
+        "description": "Subdiv",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "Name",
+            "type": "string"
+          },
+          "uri": {
+            "description": "Uri",
+            "type": "string"
+          },
+          "shape": {
+            "description": "Shape index",
+            "type": "integer"
+          },
+          "subdivisions": {
+            "description": "Subdivisions",
+            "type": "integer"
+          },
+          "smooth": {
+            "description": "Smooth normals",
+            "type": "boolean"
+          },
+          "catmullclark": {
+            "description": "Catmull-Clark subdivision",
+            "type": "boolean"
+          },
+          "displacement": {
+            "description": "Displacement amount",
+            "type": "number"
+          },
+          "displacement_tex": {
+            "description": "Displacement texture",
+            "type": "integer"
+          }
+        }
+      }
+    }
+  }
+}
