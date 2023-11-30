@@ -1,104 +1,21 @@
-# Yocto/GL: Tiny C++ Libraries for Data-Oriented Physically-based Graphics
+# CMU 15618 Final Project
 
-Yocto/GL is a collection of small C++17 libraries for building
-physically-based graphics algorithms released under the MIT license.
-Yocto/GL is written in a deliberately data-oriented style for ease of
-development and use.
-Yocto/GL is split into small libraries to make code navigation easier.
-See each header file for documentation.
+Adatped from Yocto/GL.
 
-- `yocto/yocto_math.{h}`: fixed-size vectors, matrices, rigid frames,
-  transforms
-- `yocto/yocto_color.{h}`: color conversion, color adjustment,
-  tone mapping functions, color grading, color maps, color spaces
-- `yocto/yocto_geometry.{h}`: rays, bounding boxes,
-  geometry functions, ray-primitive intersection, point-primitive overlap
-- `yocto/yocto_noise.{h}`: Perlin noise
-- `yocto/yocto_sampling.{h}`: random number generation, generation of points
-  and directions, Monte Carlo utilities
-- `yocto/yocto_shading.{h}`: evaluation and sampling of fresnel
-  functions, bsdf lobes, transmittance lobes, phase functions
-- `yocto/yocto_image.{h,cpp}`: simple image data type, image resizing,
-  tonemapping, color correction, procedural images, procedural sun-sky
-- `yocto/yocto_shape.{h,cpp}`: simple shape data structure, utilities 
-  for manipulating triangle meshes, quads meshes and line sets, computation of 
-  normals and tangents, linear and Catmull-Clark subdivision, 
-  procedural shapes generation, ray intersection and closest point queries
-- `yocto/yocto_scene.{h,cpp}`: scene representation and properties
-  evaluation
-- `yocto/yocto_bvh.{h,cpp}`: ray intersection and closest point queries
-  of triangle meshes, quads meshes, line sets and instances scenes using a
-  two-level bounding volume hierarchy
+Our files to work on:
+- `yocto/cuda_trace.{h,cpp,cu}`
+
+Main source of adaptation:
 - `yocto/yocto_trace.{h,cpp}`: path tracing of surfaces and hairs supporting
   area and environment illumination, microfacet GGX and subsurface scattering,
   multiple importance sampling
-- `yocto/yocto_sceneio.{h,cpp}`: image, shape and scene serialization
-- `yocto/yocto_modelio.{h,cpp}`: low-level parsing and writing for 
-  Ply, Obj, Stl formats
-- `yocto/yocto_pbrtio.{h,cpp}`: low-level parsing and writing for 
-  Pbrt format
-- `yocto/yocto_cli.{h}`: printing utilities and command line parsing
-- `yocto/yocto_parallel.h`: concurrency utilities (deprecated)
+- `yocto/yocto_cutrace.{h,cpp,cu}`: CUDA/OptiX version.
 
-You can see Yocto/GL in action in the following applications written to
-test the library:
 
-- `apps/ytonemap.cpp`: image conversion and viewing
-- `apps/ycolorgrade.cpp`: image color grading
-- `apps/yconvert.cpp`: scene conversion
-- `apps/yconverts.cpp`: shape conversion
+Main demo:
 - `apps/ytrace.cpp`: offline and interactive scene rendering
 - `apps/ycutrace.cpp`: offline and interactive scene rendering with CUDA
-- `apps/yview.cpp`: interactive scene viewing
 
-Here are some test images rendered with the path tracer. More images are
-included in the [project site](https://xelatihy.github.io/yocto-gl/).
-
-![Example materials: matte, plastic, metal, glass, subsurface, normal mapping](images/features1.jpg)
-
-![Example shapes: procedural shapes, Catmull-Clark subdivision, hairs, displacement mapping](images/features2.jpg)
-
-![Image rendered with Yocto/GL path tracer. Model by Disney Animation Studios.](images/island.jpg)
-
-## Design Considerations
-
-Yocto/GL follows a "data-oriented programming model" that makes data explicit.
-Data is stored in simple structs and accessed with free functions or directly.
-All data is public, so we make no attempt at encapsulation.
-We do this since this makes Yocto/GL easier to extend and quicker to learn,
-with a more explicit data flow that is easier when writing parallel code.
-Since Yocto/GL is mainly used for research and teaching,
-explicit data is both more hackable and easier to understand.
-
-Nearly all objects in Yocto/GL have value semantic. This means that everything
-can be trivially copied and serialized and there is no need for memory management. 
-While this has the drawback of potentially introducing spurious copies, it does
-have the benefit of ensuring that no memory corruption can occur, which
-turned out was a major issue for novice C++ users, even in a very small
-library like this one.
-
-In terms of code style we prefer a functional approach rather than an
-object oriented one, favoring free functions to class methods. All functions
-and data are defined in the `yocto` namespace so libraries can call each others
-trivially.
-
-The use of templates in Yocto was the reason for many refactoring, going
-from no template to heavy template use. At this point, Yocto uses some templates
-for readability. In the future, we will increase the use of templates in math
-code, while keeping many APIs explicitly typed.
-
-For error handling in IO we either return status object or an interface that
-uses boolean flags and error strings. Internally exceptions are used when used
-by external libraries, but otherwise no exception are used. At the moment,
-exceptions are only used to report "programmer errors", namely when
-preconditions or post conditions are violated in functions, just lime the
-standard library does.
-
-## License
-
-The library is released under the MIT license. We include various external
-dependencies in the distribution that each have thir own license, compatible
-with the chosen one.
 
 ## Compilation
 
