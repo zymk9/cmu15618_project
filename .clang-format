@@ -8,7 +8,6 @@ AlignConsecutiveAssignments: true
 AlignConsecutiveDeclarations: true
 
 AllowShortCaseLabelsOnASingleLine: true
-AllowShortCaseLabelsOnASingleLine: true
 
 BreakConstructorInitializersBeforeComma: true
 BreakStringLiterals: false

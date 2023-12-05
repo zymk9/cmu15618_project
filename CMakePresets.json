@@ -149,6 +149,44 @@
         "value": "x64",
         "strategy": "external"
       }
+    },
+    {
+      "name": "release-custom-cuda",
+      "description": "Release build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "YOCTO_APPS": "ON",
+        "YOCTO_EMBREE": "ON",
+        "YOCTO_DENOISE": "ON",
+        "YOCTO_OPENGL": "ON",
+        "YOCTO_CUDA": "ON",
+        "CUSTOM_CUDA": "ON"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "debug-custom-cuda",
+      "description": "Debug build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "YOCTO_APPS": "ON",
+        "YOCTO_EMBREE": "ON",
+        "YOCTO_DENOISE": "ON",
+        "YOCTO_OPENGL": "ON",
+        "YOCTO_CUDA": "ON",
+        "CUSTOM_CUDA": "ON"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      }
     }
   ],
   "buildPresets": [
@@ -175,6 +213,14 @@
     {
       "name": "debug-cuda",
       "configurePreset": "debug-cuda"
+    },
+    {
+      "name": "release-custom-cuda",
+      "configurePreset": "release-custom-cuda"
+    },
+    {
+      "name": "debug-custom-cuda",
+      "configurePreset": "debug-custom-cuda"
     }
   ]
 }

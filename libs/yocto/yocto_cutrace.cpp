@@ -28,7 +28,7 @@
 
 #include "yocto_cutrace.h"
 
-#if YOCTO_CUDA
+#if defined(YOCTO_CUDA) && !defined(CUSTOM_CUDA)
 
 #include "yocto_sampling.h"
 
@@ -428,7 +428,7 @@ cutrace_context make_cutrace_context(const trace_params& params) {
   auto log_buffer = std::array<char, 2048>();
   auto log_size   = log_buffer.size();
   auto ptx_code   = string{yocto_cutrace_ptx};
-  check_result(optixModuleCreateFromPTX(context.optix_context, &module_options,
+  check_result(optixModuleCreate(context.optix_context, &module_options,
       &compile_options, ptx_code.c_str(), ptx_code.size(), log_buffer.data(),
       &log_size, &context.optix_module));
 
@@ -788,7 +788,7 @@ cutrace_bvh make_cutrace_bvh(cutrace_context& context,
     // compact
     auto compacted_size = download_buffer_value(compacted_size_buffer);
     sbvh.buffer         = make_buffer(
-                context.cuda_stream, compacted_size, (byte*)nullptr);
+        context.cuda_stream, compacted_size, (byte*)nullptr);
     check_result(optixAccelCompact(context.optix_context,
         /*cuda_stream:*/ 0, sbvh.handle, sbvh.buffer.device_ptr(),
         sbvh.buffer.size_in_bytes(), &sbvh.handle));
@@ -861,7 +861,7 @@ cutrace_bvh make_cutrace_bvh(cutrace_context& context,
     // compact
     auto compacted_size = download_buffer_value(compacted_size_buffer);
     ibvh.buffer         = make_buffer(
-                context.cuda_stream, compacted_size, (byte*)nullptr);
+        context.cuda_stream, compacted_size, (byte*)nullptr);
     check_result(optixAccelCompact(context.optix_context,
         /*cuda_stream:*/ 0, ibvh.handle, ibvh.buffer.device_ptr(),
         ibvh.buffer.size_in_bytes(), &ibvh.handle));
@@ -896,7 +896,7 @@ cutrace_state make_cutrace_state(cutrace_context& context,
   }
   state.samples = 0;
   state.image   = make_buffer(
-        context.cuda_stream, state.width * state.height, (vec4f*)nullptr);
+      context.cuda_stream, state.width * state.height, (vec4f*)nullptr);
   state.albedo = make_buffer(
       context.cuda_stream, state.width * state.height, (vec3f*)nullptr);
   state.normal = make_buffer(

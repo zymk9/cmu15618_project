@@ -11,6 +11,7 @@ add_library(yocto STATIC
   yocto_sceneio.h yocto_sceneio.cpp
   yocto_gui.h yocto_gui.cpp
   yocto_cutrace.h yocto_cutrace.cpp
+  cuda_trace.h cuda_trace.cpp
   yocto_parallel.h yocto_cli.h
 )
 
@@ -62,19 +63,28 @@ find_package_handle_standard_args(OptiX FOUND_VAR OptiX_FOUND REQUIRED_VARS Opti
 add_library(OptiX::OptiX INTERFACE IMPORTED)
 target_include_directories(OptiX::OptiX INTERFACE ${OptiX_ROOT_DIR}/include)
 
-embed_ptx(
-  OUTPUT_TARGET
-    yocto_cutrace_device
-  PTX_LINK_LIBRARIES
-    OptiX::OptiX
-  SOURCES
-    yocto_cutrace.cu
-)
-
 target_compile_definitions(yocto PUBLIC -DYOCTO_CUDA)
 
 find_package(CUDAToolkit REQUIRED)
-target_link_libraries(yocto PUBLIC OptiX::OptiX yocto_cutrace_device CUDA::cuda_driver CUDA::cudart_static)
+
+if(CUSTOM_CUDA)
+  add_library(cuda_trace_device cuda_trace.cu)
+  target_compile_options(cuda_trace_device PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
+  target_compile_definitions(yocto PUBLIC -DCUSTOM_CUDA)
+
+  target_link_libraries(yocto PUBLIC OptiX::OptiX cuda_trace_device CUDA::cuda_driver CUDA::cudart_static)
+else(CUSTOM_CUDA)
+  embed_ptx(
+    OUTPUT_TARGET
+      yocto_cutrace_device
+    PTX_LINK_LIBRARIES
+      OptiX::OptiX
+    SOURCES
+      yocto_cutrace.cu
+  )
+
+  target_link_libraries(yocto PUBLIC OptiX::OptiX yocto_cutrace_device CUDA::cuda_driver CUDA::cudart_static)
+endif(CUSTOM_CUDA)
 
 endif(YOCTO_CUDA)
 

@@ -38,6 +38,10 @@
 #include <future>
 #include <stdexcept>
 
+#ifdef CUSTOM_CUDA
+#include "cuda_trace.h"
+#include "yocto_trace.h"
+#endif
 #include "yocto_cutrace.h"
 #include "yocto_geometry.h"
 
@@ -774,7 +778,12 @@ void show_cutrace_gui(const string& title, const string& name,
   auto cuscene = make_cutrace_scene(context, scene, params);
 
   // build bvh
+#ifdef CUSTOM_CUDA
+  auto bvh_cpu = make_trace_bvh(scene, params);
+  auto bvh     = make_cutrace_bvh(context, cuscene, params, bvh_cpu.bvh);
+#else
   auto bvh = make_cutrace_bvh(context, cuscene, params);
+#endif
 
   // init lights
   auto lights = make_cutrace_lights(context, scene, params);

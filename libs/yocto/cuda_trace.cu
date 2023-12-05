@@ -2,8 +2,7 @@
 // cuda_trace implementation.
 //
 
-
-#include <optix_device.h>
+#include <cuda.h>
 
 #include "yocto_color.h"
 #include "yocto_geometry.h"
@@ -270,6 +269,28 @@ struct cuscene_data {
   cuspan<cuenvironment_data> environments = {};
 };
 
+struct bvh_node {
+  bbox3f  bbox     = invalidb3f;
+  int32_t start    = 0;
+  int16_t num      = 0;
+  int8_t  axis     = 0;
+  bool    internal = false;
+};
+
+struct cubvh_tree {
+  cuspan<bvh_node> nodes      = {};
+  cuspan<int>      primitives = {};
+};
+
+struct cushape_bvh {
+  cubvh_tree bvh = {};
+};
+
+struct cuscene_bvh {
+  cubvh_tree          bvh    = {};
+  cuspan<cushape_bvh> shapes = {};
+};
+
 // Type of tracing algorithm
 enum struct trace_sampler_type {
   path,        // path tracing
@@ -315,7 +336,7 @@ struct trace_params {
   int                   batch          = 1;
 };
 
-using cutrace_bvh = OptixTraversableHandle;
+using cutrace_bvh = cuscene_bvh;
 
 // light
 struct cutrace_light {
@@ -330,15 +351,15 @@ struct cutrace_lights {
 };
 
 struct cutrace_globals {
-  cutrace_state          state  = {};
-  cuscene_data           scene  = {};
-  OptixTraversableHandle bvh    = 0;
-  cutrace_lights         lights = {};
-  trace_params           params = {};
+  cutrace_state  state  = {};
+  cuscene_data   scene  = {};
+  cuscene_bvh    bvh    = {};
+  cutrace_lights lights = {};
+  trace_params   params = {};
 };
 
 // global data
-optix_constant cutrace_globals globals;
+__constant__ cutrace_globals globals;
 
 // compatibility aliases
 using trace_bvh    = cutrace_bvh;
@@ -674,39 +695,133 @@ struct scene_intersection {
   float _pad     = 0;
 };
 
-// closest hit
-optix_shader void __closesthit__intersect_scene() {
-  auto& intersection    = *getPRD<scene_intersection>();
-  intersection.instance = optixGetInstanceIndex();
-  intersection.element  = optixGetPrimitiveIndex();
-  intersection.uv       = {
-            optixGetTriangleBarycentrics().x, optixGetTriangleBarycentrics().y};
-  intersection.distance = optixGetRayTmax();
-  intersection.hit      = true;
+struct shape_intersection {
+  int   element  = -1;
+  vec2f uv       = {0, 0};
+  float distance = 0;
+  bool  hit      = false;
+};
+
+static shape_intersection intersect_shape_bvh(
+    const cushape_bvh& sbvh, const shape_data& shape, const ray3f& ray_) {
+  // get bvh tree
+  auto& bvh = sbvh.bvh;
+
+  // check empty
+  if (bvh.nodes.empty()) return {};
+
+  // node stack
+  int  node_stack[128];
+  auto node_cur          = 0;
+  node_stack[node_cur++] = 0;
+
+  // shared variables
+  auto intersection = shape_intersection{};
+
+  // copy ray to modify it
+  auto ray = ray_;
+
+  // prepare ray for fast queries
+  auto ray_dinv  = vec3f{1 / ray.d.x, 1 / ray.d.y, 1 / ray.d.z};
+  auto ray_dsign = vec3i{(ray_dinv.x < 0) ? 1 : 0, (ray_dinv.y < 0) ? 1 : 0,
+      (ray_dinv.z < 0) ? 1 : 0};
+
+  // walking stack
+  while (node_cur != 0) {
+    // grab node
+    auto& node = bvh.nodes[node_stack[--node_cur]];
+
+    // intersect bbox
+    // if (!intersect_bbox(ray, ray_dinv, ray_dsign, node.bbox)) continue;
+    if (!intersect_bbox(ray, ray_dinv, node.bbox)) continue;
+
+    // intersect node, switching based on node type
+    // for each type, iterate over the the primitive list
+    if (node.internal) {
+      // for internal nodes, attempts to proceed along the
+      // split axis from smallest to largest nodes
+      if (ray_dsign[node.axis] != 0) {
+        node_stack[node_cur++] = node.start + 0;
+        node_stack[node_cur++] = node.start + 1;
+      } else {
+        node_stack[node_cur++] = node.start + 1;
+        node_stack[node_cur++] = node.start + 0;
+      }
+    } else if (!shape.triangles.empty()) {
+      for (auto idx = node.start; idx < node.start + node.num; idx++) {
+        auto& t             = shape.triangles[bvh.primitives[idx]];
+        auto  pintersection = intersect_triangle(ray, shape.positions[t.x],
+             shape.positions[t.y], shape.positions[t.z]);
+        if (!pintersection.hit) continue;
+        intersection = {bvh.primitives[idx], pintersection.uv,
+            pintersection.distance, true};
+        ray.tmax     = pintersection.distance;
+      }
+    }
+  }
+
+  return intersection;
 }
 
-// anyhit shader
-optix_shader void __anyhit__intersect_scene() {}
-
-// miss shader
-optix_shader void __miss__intersect_scene() {
-  auto& intersection    = *getPRD<scene_intersection>();
-  intersection.instance = 0;
-  intersection.element  = 0;
-  intersection.uv       = {0, 0};
-  intersection.distance = optixGetRayTmax();
-  intersection.hit      = false;
-}
-
-// scene intersection via shaders
 static scene_intersection intersect_scene(
-    const trace_bvh& bvh, const cuscene_data& scene, const ray3f& ray) {
-  auto     intersection = scene_intersection{};
-  uint32_t u0, u1;
-  packPointer(&intersection, u0, u1);
-  optixTrace(bvh, {ray.o.x, ray.o.y, ray.o.z}, {ray.d.x, ray.d.y, ray.d.z},
-      ray.tmin, ray.tmax, 0.0f, OptixVisibilityMask(255),
-      OPTIX_RAY_FLAG_DISABLE_ANYHIT, 0, 0, 0, u0, u1);
+    const cuscene_bvh& sbvh, const scene_data& scene, const ray3f& ray_) {
+  // get instances bvh
+  auto& bvh = sbvh.bvh;
+
+  // check empty
+  if (bvh.nodes.empty()) return {};
+
+  // node stack
+  int  node_stack[128];
+  auto node_cur          = 0;
+  node_stack[node_cur++] = 0;
+
+  // intersection
+  auto intersection = scene_intersection{};
+
+  // copy ray to modify it
+  auto ray = ray_;
+
+  // prepare ray for fast queries
+  auto ray_dinv  = vec3f{1 / ray.d.x, 1 / ray.d.y, 1 / ray.d.z};
+  auto ray_dsign = vec3i{(ray_dinv.x < 0) ? 1 : 0, (ray_dinv.y < 0) ? 1 : 0,
+      (ray_dinv.z < 0) ? 1 : 0};
+
+  // walking stack
+  while (node_cur != 0) {
+    // grab node
+    auto& node = bvh.nodes[node_stack[--node_cur]];
+
+    // intersect bbox
+    // if (!intersect_bbox(ray, ray_dinv, ray_dsign, node.bbox)) continue;
+    if (!intersect_bbox(ray, ray_dinv, node.bbox)) continue;
+
+    // intersect node, switching based on node type
+    // for each type, iterate over the the primitive list
+    if (node.internal) {
+      // for internal nodes, attempts to proceed along the
+      // split axis from smallest to largest nodes
+      if (ray_dsign[node.axis] != 0) {
+        node_stack[node_cur++] = node.start + 0;
+        node_stack[node_cur++] = node.start + 1;
+      } else {
+        node_stack[node_cur++] = node.start + 1;
+        node_stack[node_cur++] = node.start + 0;
+      }
+    } else {
+      for (auto idx = node.start; idx < node.start + node.num; idx++) {
+        auto& instance_ = scene.instances[bvh.primitives[idx]];
+        auto  inv_ray   = transform_ray(inverse(instance_.frame, true), ray);
+        auto  sintersection = intersect_shape_bvh(sbvh.shapes[instance_.shape],
+             scene.shapes[instance_.shape], inv_ray);
+        if (!sintersection.hit) continue;
+        intersection = {bvh.primitives[idx], sintersection.element,
+            sintersection.uv, sintersection.distance, true};
+        ray.tmax     = sintersection.distance;
+      }
+    }
+  }
+
   return intersection;
 }
 
@@ -1105,7 +1220,7 @@ static trace_result trace_path(const scene_data& scene, const trace_bvh& bvh,
     if (!volume_stack.empty()) {
       auto& vsdf     = volume_stack.back();
       auto  distance = sample_transmittance(
-           vsdf.density, intersection.distance, rand1f(rng), rand1f(rng));
+          vsdf.density, intersection.distance, rand1f(rng), rand1f(rng));
       weight *= eval_transmittance(vsdf.density, distance) /
                 sample_transmittance_pdf(
                     vsdf.density, distance, intersection.distance);
@@ -1252,7 +1367,7 @@ static trace_result trace_pathdirect(const scene_data& scene,
     if (!volume_stack.empty()) {
       auto& vsdf     = volume_stack.back();
       auto  distance = sample_transmittance(
-           vsdf.density, intersection.distance, rand1f(rng), rand1f(rng));
+          vsdf.density, intersection.distance, rand1f(rng), rand1f(rng));
       weight *= eval_transmittance(vsdf.density, distance) /
                 sample_transmittance_pdf(
                     vsdf.density, distance, intersection.distance);
@@ -1431,7 +1546,7 @@ static trace_result trace_pathmis(const scene_data& scene, const trace_bvh& bvh,
     if (!volume_stack.empty()) {
       auto& vsdf     = volume_stack.back();
       auto  distance = sample_transmittance(
-           vsdf.density, intersection.distance, rand1f(rng), rand1f(rng));
+          vsdf.density, intersection.distance, rand1f(rng), rand1f(rng));
       weight *= eval_transmittance(vsdf.density, distance) /
                 sample_transmittance_pdf(
                     vsdf.density, distance, intersection.distance);
@@ -2109,10 +2224,17 @@ static void trace_sample(cutrace_state& state, const cuscene_data& scene,
   }
 }
 
-// raygen shader
-optix_shader void __raygen__trace_pixel() {
+// trace a batch of samples for each pixel
+extern "C" __global__ void trace_pixel() {
   // pixel index
-  auto ij  = optixGetLaunchIndex();
+  uint2 ij;
+  ij.x = blockIdx.x * blockDim.x + threadIdx.x;
+  ij.y = blockIdx.y * blockDim.y + threadIdx.y;
+
+  if (ij.x >= globals.state.width || ij.y >= globals.state.height) {
+    return;
+  }
+
   auto idx = ij.y * globals.state.width + ij.x;
 
   // initialize state on first sample
@@ -2126,9 +2248,36 @@ optix_shader void __raygen__trace_pixel() {
   auto nsamples = globals.params.batch;
   for (auto sample = ssample; sample < ssample + nsamples; sample++) {
     trace_sample(globals.state, globals.scene, globals.bvh, globals.lights,
-        optixGetLaunchIndex().x, optixGetLaunchIndex().y, sample,
-        globals.params);
+        ij.x, ij.y, sample, globals.params);
   }
+}
+
+// dispatch trace_pixel for each pixel
+extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
+  auto globals_cpu = cutrace_globals{};
+  auto result      = cuMemcpyDtoH(
+      &globals_cpu, trace_globals, sizeof(cutrace_globals));
+  if (result != CUDA_SUCCESS) {
+    const char* error_name;
+    cuGetErrorName(result, &error_name);
+    printf("cutrace_samples: cuMemcpyDtoH error: %s\n", error_name);
+  }
+
+  auto cpyResult = cudaMemcpyToSymbol(
+      globals, &globals_cpu, sizeof(cutrace_globals));
+  if (cpyResult != cudaSuccess) {
+    printf("cutrace_samples: cudaMemcpyToSymbol error: %s\n",
+        cudaGetErrorName(cpyResult));
+  }
+
+  int width  = globals_cpu.state.width;
+  int height = globals_cpu.state.height;
+
+  dim3 blockSize = {16, 16, 1};
+  dim3 gridSize  = {(width + blockSize.x - 1) / blockSize.x,
+       (height + blockSize.y - 1) / blockSize.y, 1};
+
+  trace_pixel<<<gridSize, blockSize>>>();
 }
 
 }  // namespace yocto

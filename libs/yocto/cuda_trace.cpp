@@ -2,7 +2,9 @@
 // Implementation for cuda_trace.
 //
 
-#include "yocto_cutrace.h"
+#include "cuda_trace.h"
+
+#if defined(YOCTO_CUDA) && defined(CUSTOM_CUDA)
 
 #include "yocto_sampling.h"
 
@@ -34,11 +36,11 @@ static void sync_gpu(CUstream stream) {
   check_result(cuStreamSynchronize(stream));
 }
 
-static void check_result(OptixResult result) {
-  if (result != OPTIX_SUCCESS) {
-    throw std::runtime_error{"Optix error"};
-  }
-}
+// static void check_result(OptixResult result) {
+//   if (result != OPTIX_SUCCESS) {
+//     throw std::runtime_error{"Optix error"};
+//   }
+// }
 
 // make a buffer
 template <typename T>
@@ -153,6 +155,7 @@ static void clear_buffer(cuspan<T>& buffer) {
 namespace yocto {
 
 extern "C" char yocto_cutrace_ptx[];
+extern "C" void cutrace_samples(CUdeviceptr trace_globals);
 
 cuscene_data::cuscene_data(cuscene_data&& other) {
   cameras.swap(other.cameras);
@@ -198,71 +201,50 @@ cuscene_data::~cuscene_data() {
 };
 
 cubvh_tree::cubvh_tree(cubvh_tree&& other) {
-  buffer.swap(other.buffer);
-  std::swap(handle, other.handle);
+  nodes.swap(other.nodes);
+  primitives.swap(other.primitives);
 }
 cubvh_tree& cubvh_tree::operator=(cubvh_tree&& other) {
-  buffer.swap(other.buffer);
-  std::swap(handle, other.handle);
+  nodes.swap(other.nodes);
+  primitives.swap(other.primitives);
   return *this;
 }
-cubvh_tree::~cubvh_tree() { clear_buffer(buffer); }
+cubvh_tree::~cubvh_tree() {
+  clear_buffer(nodes);
+  clear_buffer(primitives);
+}
 
 cushape_bvh::cushape_bvh(cushape_bvh&& other) {
-  bvh.buffer.swap(other.bvh.buffer);
-  std::swap(bvh.handle, other.bvh.handle);
+  bvh.nodes.swap(other.bvh.nodes);
+  bvh.primitives.swap(other.bvh.primitives);
 }
 cushape_bvh& cushape_bvh::operator=(cushape_bvh&& other) {
-  bvh.buffer.swap(other.bvh.buffer);
-  std::swap(bvh.handle, other.bvh.handle);
+  bvh.nodes.swap(other.bvh.nodes);
+  bvh.primitives.swap(other.bvh.primitives);
   return *this;
 }
 cushape_bvh::~cushape_bvh() {}
 
 cuscene_bvh::cuscene_bvh(cuscene_bvh&& other) {
-  instances.swap(other.instances);
   shapes.swap(other.shapes);
-  bvh.buffer.swap(other.bvh.buffer);
-  std::swap(bvh.handle, other.bvh.handle);
+  bvh.nodes.swap(other.bvh.nodes);
+  bvh.primitives.swap(other.bvh.primitives);
 }
 cuscene_bvh& cuscene_bvh::operator=(cuscene_bvh&& other) {
-  instances.swap(other.instances);
   shapes.swap(other.shapes);
-  bvh.buffer.swap(other.bvh.buffer);
-  std::swap(bvh.handle, other.bvh.handle);
+  bvh.nodes.swap(other.bvh.nodes);
+  bvh.primitives.swap(other.bvh.primitives);
   return *this;
 }
-cuscene_bvh::~cuscene_bvh() { clear_buffer(instances); }
+cuscene_bvh::~cuscene_bvh() { clear_buffer(shapes); }
 
 cutrace_context::cutrace_context(cutrace_context&& other) {
-  std::swap(denoiser, other.denoiser);
   globals_buffer.swap(other.globals_buffer);
-  raygen_records.swap(other.raygen_records);
-  miss_records.swap(other.miss_records);
-  hitgroup_records.swap(other.hitgroup_records);
-  std::swap(binding_table, other.binding_table);
-  std::swap(raygen_program, other.raygen_program);
-  std::swap(miss_program, other.miss_program);
-  std::swap(hitgroup_program, other.hitgroup_program);
-  std::swap(optix_pipeline, other.optix_pipeline);
-  std::swap(optix_module, other.optix_module);
-  std::swap(optix_context, other.optix_context);
   std::swap(cuda_stream, other.cuda_stream);
   std::swap(cuda_context, other.cuda_context);
 }
 cutrace_context& cutrace_context::operator=(cutrace_context&& other) {
-  std::swap(denoiser, other.denoiser);
   globals_buffer.swap(other.globals_buffer);
-  raygen_records.swap(other.raygen_records);
-  miss_records.swap(other.miss_records);
-  hitgroup_records.swap(other.hitgroup_records);
-  std::swap(binding_table, other.binding_table);
-  std::swap(raygen_program, other.raygen_program);
-  std::swap(miss_program, other.miss_program);
-  std::swap(hitgroup_program, other.hitgroup_program);
-  std::swap(optix_pipeline, other.optix_pipeline);
-  std::swap(optix_module, other.optix_module);
-  std::swap(optix_context, other.optix_context);
   std::swap(cuda_stream, other.cuda_stream);
   std::swap(cuda_context, other.cuda_context);
   return *this;
@@ -324,28 +306,10 @@ cutrace_lights::~cutrace_lights() {
 }
 
 cutrace_context::~cutrace_context() {
-  // denoiser
-  optixDenoiserDestroy(denoiser);
-
   // global buffer
   clear_buffer(globals_buffer);
 
-  // stb
-  clear_buffer(raygen_records);
-  clear_buffer(miss_records);
-  clear_buffer(hitgroup_records);
-
-  // programs
-  optixProgramGroupDestroy(raygen_program);
-  optixProgramGroupDestroy(miss_program);
-  optixProgramGroupDestroy(hitgroup_program);
-
-  // pipeline
-  optixPipelineDestroy(optix_pipeline);
-  optixModuleDestroy(optix_module);
-
   // context
-  optixDeviceContextDestroy(optix_context);
   cuStreamDestroy(cuda_stream);
   cuCtxDestroy(cuda_context);
 }
@@ -366,126 +330,13 @@ cutrace_context make_cutrace_context(const trace_params& params) {
   check_result(cuCtxCreate(&context.cuda_context, CU_CTX_SCHED_SPIN, device));
 
   // init optix
-  check_result(optixInit());
+  // check_result(optixInit());
 
   // init cuda device
   check_result(cuStreamCreate(&context.cuda_stream, CU_STREAM_DEFAULT));
 
-  // init optix device --- disable logging
-  auto enable_logging          = false;
-  auto ooptions                = OptixDeviceContextOptions{};
-  ooptions.logCallbackFunction = optix_log_callback;
-  ooptions.logCallbackData     = nullptr;
-  ooptions.logCallbackLevel    = 4;
-  ooptions.validationMode      = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL;
-  check_result(cuCtxGetCurrent(&context.cuda_context));
-  check_result(optixDeviceContextCreate(context.cuda_context,
-      enable_logging ? &ooptions : nullptr, &context.optix_context));
-
-  // options
-  auto module_options             = OptixModuleCompileOptions{};
-  module_options.maxRegisterCount = 50;
-  module_options.optLevel         = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
-  module_options.debugLevel       = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
-  auto compile_options            = OptixPipelineCompileOptions{};
-  compile_options.traversableGraphFlags =
-      OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
-  compile_options.usesMotionBlur                   = false;
-  compile_options.numPayloadValues                 = 2;
-  compile_options.numAttributeValues               = 2;
-  compile_options.exceptionFlags                   = OPTIX_EXCEPTION_FLAG_NONE;
-  compile_options.pipelineLaunchParamsVariableName = "globals";
-  auto link_options                                = OptixPipelineLinkOptions{};
-  link_options.maxTraceDepth                       = 2;
-
-  // optix_module
-  auto log_buffer = std::array<char, 2048>();
-  auto log_size   = log_buffer.size();
-  auto ptx_code   = string{yocto_cutrace_ptx};
-  check_result(optixModuleCreateFromPTX(context.optix_context, &module_options,
-      &compile_options, ptx_code.c_str(), ptx_code.size(), log_buffer.data(),
-      &log_size, &context.optix_module));
-
-  // raygen program
-  auto raygen_options                        = OptixProgramGroupOptions{};
-  auto raygen_descriptor                     = OptixProgramGroupDesc{};
-  raygen_descriptor.kind                     = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
-  raygen_descriptor.raygen.module            = context.optix_module;
-  raygen_descriptor.raygen.entryFunctionName = "__raygen__trace_pixel";
-  check_result(optixProgramGroupCreate(context.optix_context,
-      &raygen_descriptor, 1, &raygen_options, log_buffer.data(), &log_size,
-      &context.raygen_program));
-
-  // miss program
-  auto miss_options                      = OptixProgramGroupOptions{};
-  auto miss_descriptor                   = OptixProgramGroupDesc{};
-  miss_descriptor.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
-  miss_descriptor.miss.module            = context.optix_module;
-  miss_descriptor.miss.entryFunctionName = "__miss__intersect_scene";
-  check_result(optixProgramGroupCreate(context.optix_context, &miss_descriptor,
-      1, &miss_options, log_buffer.data(), &log_size, &context.miss_program));
-
-  // hitgroup program
-  auto hitgroup_options                 = OptixProgramGroupOptions{};
-  auto hitgroup_descriptor              = OptixProgramGroupDesc{};
-  hitgroup_descriptor.kind              = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-  hitgroup_descriptor.hitgroup.moduleCH = context.optix_module;
-  hitgroup_descriptor.hitgroup.entryFunctionNameCH =
-      "__closesthit__intersect_scene";
-  hitgroup_descriptor.hitgroup.moduleAH = context.optix_module;
-  hitgroup_descriptor.hitgroup.entryFunctionNameAH =
-      "__anyhit__intersect_scene";
-  check_result(optixProgramGroupCreate(context.optix_context,
-      &hitgroup_descriptor, 1, &hitgroup_options, log_buffer.data(), &log_size,
-      &context.hitgroup_program));
-
-  // pipeline
-  auto program_groups = array<OptixProgramGroup, 3>{
-      context.raygen_program, context.miss_program, context.hitgroup_program};
-  check_result(optixPipelineCreate(context.optix_context, &compile_options,
-      &link_options, program_groups.data(), (int)program_groups.size(),
-      log_buffer.data(), &log_size, &context.optix_pipeline));
-  check_result(optixPipelineSetStackSize(
-      context.optix_pipeline, 3 * 1024, 3 * 1024, 3 * 1024, 2));
-
-  // stb raygen
-  auto raygen_record = cutrace_stbrecord{};
-  check_result(
-      optixSbtRecordPackHeader(context.raygen_program, &raygen_record));
-  context.raygen_records = make_buffer(context.cuda_stream, raygen_record);
-  context.binding_table.raygenRecord = context.raygen_records.device_ptr();
-
-  // stb miss
-  auto miss_record = cutrace_stbrecord{};
-  check_result(optixSbtRecordPackHeader(context.miss_program, &miss_record));
-  context.miss_records = make_buffer(context.cuda_stream, miss_record);
-  context.binding_table.missRecordBase = context.miss_records.device_ptr();
-  context.binding_table.missRecordStrideInBytes = sizeof(cutrace_stbrecord);
-  context.binding_table.missRecordCount         = 1;
-
-  // stb hitgroup
-  auto hitgroup_record = cutrace_stbrecord{};
-  check_result(
-      optixSbtRecordPackHeader(context.hitgroup_program, &hitgroup_record));
-  context.hitgroup_records = make_buffer(context.cuda_stream, hitgroup_record);
-  context.binding_table.hitgroupRecordBase =
-      context.hitgroup_records.device_ptr();
-  context.binding_table.hitgroupRecordStrideInBytes = sizeof(cutrace_stbrecord);
-  context.binding_table.hitgroupRecordCount         = 1;
-
   // globals
   context.globals_buffer = make_buffer(context.cuda_stream, cutrace_globals{});
-
-  // denoiser
-  auto doptions        = OptixDenoiserOptions{};
-  doptions.guideAlbedo = (uint) true;
-  doptions.guideNormal = (uint) true;
-  check_result(optixDenoiserCreate(context.optix_context,
-      OPTIX_DENOISER_MODEL_KIND_HDR, &doptions, &context.denoiser));
-
-  auto denoiser_sizes = OptixDenoiserSizes{};
-  check_result(optixDenoiserComputeMemoryResources(
-      context.denoiser, 1280, 1280, &denoiser_sizes));
 
   // sync gpu
   sync_gpu(context.cuda_stream);
@@ -504,7 +355,7 @@ void trace_start(cutrace_context& context, cutrace_state& state,
   update_buffer_value(context.cuda_stream, context.globals_buffer,
       offsetof(cutrace_globals, scene), cuscene);
   update_buffer_value(context.cuda_stream, context.globals_buffer,
-      offsetof(cutrace_globals, bvh), bvh.bvh.handle);
+      offsetof(cutrace_globals, bvh), bvh);
   update_buffer_value(context.cuda_stream, context.globals_buffer,
       offsetof(cutrace_globals, lights), lights);
   update_buffer_value(context.cuda_stream, context.globals_buffer,
@@ -523,10 +374,10 @@ void trace_samples(cutrace_context& context, cutrace_state& state,
   update_buffer_value(context.cuda_stream, context.globals_buffer,
       offsetof(cutrace_globals, state) + offsetof(cutrace_state, samples),
       state.samples);
-  check_result(optixLaunch(context.optix_pipeline, context.cuda_stream,
-      context.globals_buffer.device_ptr(),
-      context.globals_buffer.size_in_bytes(), &context.binding_table,
-      state.width, state.height, 1));
+
+  sync_gpu(context.cuda_stream);
+  cutrace_samples(context.globals_buffer.device_ptr());
+
   state.samples += nsamples;
   if (params.denoise) {
     denoise_image(context, state);
@@ -692,162 +543,34 @@ void update_cutrace_cameras(cutrace_context& context, cuscene_data& cuscene,
   sync_gpu(context.cuda_stream);
 }
 
+cubvh_tree make_cubvh_tree(cutrace_context& context, const bvh_tree& bvh_cpu) {
+  auto bvh = cubvh_tree{};
+
+  // nodes
+  bvh.nodes = make_buffer(context.cuda_stream, bvh_cpu.nodes);
+
+  // primitives
+  bvh.primitives = make_buffer(context.cuda_stream, bvh_cpu.primitives);
+
+  // sync
+  sync_gpu(context.cuda_stream);
+
+  return bvh;
+}
+
 cutrace_bvh make_cutrace_bvh(cutrace_context& context,
-    const cuscene_data& scene, const trace_params& params) {
+    const cuscene_data& scene, const trace_params& params,
+    const scene_bvh& bvh_cpu) {
   auto bvh = cutrace_bvh{};
 
-  // download shapes and instances
-  // this is not efficient, but keeps the API very clean
-  // in the future, we might want to merge scene and bvh creation
-  auto shapes_data    = download_buffer_vector(scene.shapes);
-  auto instances_data = download_buffer_vector(scene.instances);
+  bvh.bvh = make_cubvh_tree(context, bvh_cpu.bvh);
+  context.shape_bvhs.resize(bvh_cpu.shapes.size());
 
-  // shapes
-  bvh.shapes.resize(scene.shapes.size());
-  for (auto shape_id = (size_t)0; shape_id < scene.shapes.size(); shape_id++) {
-    auto& shape = shapes_data[shape_id];
-
-    // input
-    auto built_input                       = OptixBuildInput{};
-    built_input.type                       = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
-    built_input.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3;
-    built_input.triangleArray.vertexStrideInBytes = sizeof(vec3f);
-    built_input.triangleArray.numVertices         = (int)shape.positions.size();
-    auto vertex_buffer                      = shape.positions.device_ptr();
-    built_input.triangleArray.vertexBuffers = &vertex_buffer;
-    built_input.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
-    built_input.triangleArray.indexStrideInBytes = sizeof(vec3i);
-    built_input.triangleArray.numIndexTriplets   = (int)shape.triangles.size();
-    auto index_buffer                            = shape.triangles.device_ptr();
-    built_input.triangleArray.indexBuffer        = index_buffer;
-    auto input_flags                             = (unsigned int)0;
-    built_input.triangleArray.flags              = &input_flags;
-    built_input.triangleArray.numSbtRecords      = 1;
-    built_input.triangleArray.sbtIndexOffsetBuffer        = 0;
-    built_input.triangleArray.sbtIndexOffsetSizeInBytes   = 0;
-    built_input.triangleArray.sbtIndexOffsetStrideInBytes = 0;
-
-    // setup
-    auto accelerator_options       = OptixAccelBuildOptions{};
-    accelerator_options.buildFlags = OPTIX_BUILD_FLAG_NONE |
-                                     OPTIX_BUILD_FLAG_ALLOW_COMPACTION;
-    accelerator_options.motionOptions.numKeys = 1;
-    accelerator_options.operation             = OPTIX_BUILD_OPERATION_BUILD;
-
-    auto accelerator_sizes = OptixAccelBufferSizes{};
-    check_result(optixAccelComputeMemoryUsage(context.optix_context,
-        &accelerator_options, &built_input, (int)1, &accelerator_sizes));
-
-    auto compacted_size_buffer = make_buffer(
-        context.cuda_stream, 1, (uint64_t*)nullptr);
-    auto readback_descriptor   = OptixAccelEmitDesc{};
-    readback_descriptor.type   = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
-    readback_descriptor.result = compacted_size_buffer.device_ptr();
-
-    // build
-    auto temporary_buffer = make_buffer(
-        context.cuda_stream, accelerator_sizes.tempSizeInBytes, (byte*)nullptr);
-    auto  bvh_buffer = make_buffer(context.cuda_stream,
-         accelerator_sizes.outputSizeInBytes, (byte*)nullptr);
-    auto& sbvh       = bvh.shapes[shape_id].bvh;
-    check_result(optixAccelBuild(context.optix_context,
-        /* cuda_stream */ 0, &accelerator_options, &built_input, (int)1,
-        temporary_buffer.device_ptr(), temporary_buffer.size_in_bytes(),
-        bvh_buffer.device_ptr(), bvh_buffer.size_in_bytes(), &sbvh.handle,
-        &readback_descriptor, 1));
-
-    // sync
-    sync_gpu(context.cuda_stream);
-
-    // compact
-    auto compacted_size = download_buffer_value(compacted_size_buffer);
-    sbvh.buffer         = make_buffer(
-                context.cuda_stream, compacted_size, (byte*)nullptr);
-    check_result(optixAccelCompact(context.optix_context,
-        /*cuda_stream:*/ 0, sbvh.handle, sbvh.buffer.device_ptr(),
-        sbvh.buffer.size_in_bytes(), &sbvh.handle));
-
-    // sync
-    sync_gpu(context.cuda_stream);
-
-    // cleanup
-    clear_buffer(bvh_buffer);
-    clear_buffer(temporary_buffer);
-    clear_buffer(compacted_size_buffer);
+  for (size_t i = 0; i < bvh_cpu.shapes.size(); i++) {
+    context.shape_bvhs[i].bvh = make_cubvh_tree(context, bvh_cpu.shapes[i].bvh);
   }
 
-  // instances
-  {
-    // upload data
-    auto opinstances = vector<OptixInstance>(scene.instances.size());
-    for (auto instance_id = 0; instance_id < scene.instances.size();
-         instance_id++) {
-      auto& instance   = instances_data[instance_id];
-      auto& opinstance = opinstances[instance_id];
-      auto  transform  = transpose(frame_to_mat(instance.frame));
-      memcpy(opinstance.transform, &transform, sizeof(float) * 12);
-      opinstance.sbtOffset         = 0;
-      opinstance.instanceId        = instance_id;
-      opinstance.traversableHandle = bvh.shapes[instance.shape].bvh.handle;
-      opinstance.flags             = OPTIX_INSTANCE_FLAG_NONE;
-      opinstance.visibilityMask    = 0xff;
-    }
-    bvh.instances = make_buffer(context.cuda_stream, opinstances);
-
-    // config
-    auto build_input                       = OptixBuildInput{};
-    build_input.type                       = OPTIX_BUILD_INPUT_TYPE_INSTANCES;
-    build_input.instanceArray.instances    = bvh.instances.device_ptr();
-    build_input.instanceArray.numInstances = (int)scene.instances.size();
-
-    auto accelerator_options       = OptixAccelBuildOptions{};
-    accelerator_options.buildFlags = OPTIX_BUILD_FLAG_NONE |
-                                     OPTIX_BUILD_FLAG_ALLOW_COMPACTION;
-    accelerator_options.motionOptions.numKeys = 1;
-    accelerator_options.operation             = OPTIX_BUILD_OPERATION_BUILD;
-
-    auto accelerator_sizes = OptixAccelBufferSizes{};
-    check_result(optixAccelComputeMemoryUsage(context.optix_context,
-        &accelerator_options, &build_input, (int)1, &accelerator_sizes));
-
-    auto compacted_size_buffer = make_buffer(
-        context.cuda_stream, 1, (uint64_t*)nullptr);
-    auto readback_descriptor   = OptixAccelEmitDesc{};
-    readback_descriptor.type   = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
-    readback_descriptor.result = compacted_size_buffer.device_ptr();
-
-    // build
-    auto temporary_buffer = make_buffer(
-        context.cuda_stream, accelerator_sizes.tempSizeInBytes, (byte*)nullptr);
-    auto bvh_buffer = make_buffer(context.cuda_stream,
-        accelerator_sizes.outputSizeInBytes, (byte*)nullptr);
-
-    auto& ibvh = bvh.bvh;
-    check_result(optixAccelBuild(context.optix_context,
-        /* cuda_stream */ 0, &accelerator_options, &build_input, (int)1,
-        temporary_buffer.device_ptr(), temporary_buffer.size_in_bytes(),
-        bvh_buffer.device_ptr(), bvh_buffer.size_in_bytes(), &ibvh.handle,
-        &readback_descriptor, 1));
-
-    // sync gpu
-    sync_gpu(context.cuda_stream);
-
-    // compact
-    auto compacted_size = download_buffer_value(compacted_size_buffer);
-    ibvh.buffer         = make_buffer(
-                context.cuda_stream, compacted_size, (byte*)nullptr);
-    check_result(optixAccelCompact(context.optix_context,
-        /*cuda_stream:*/ 0, ibvh.handle, ibvh.buffer.device_ptr(),
-        ibvh.buffer.size_in_bytes(), &ibvh.handle));
-
-    // sync gpu
-    sync_gpu(context.cuda_stream);
-
-    // cleanup
-    clear_buffer(bvh_buffer);
-    clear_buffer(temporary_buffer);
-    clear_buffer(compacted_size_buffer);
-  }
+  bvh.shapes = make_buffer(context.cuda_stream, context.shape_bvhs);
 
   // sync gpu
   sync_gpu(context.cuda_stream);
@@ -870,7 +593,7 @@ cutrace_state make_cutrace_state(cutrace_context& context,
   }
   state.samples = 0;
   state.image   = make_buffer(
-        context.cuda_stream, state.width * state.height, (vec4f*)nullptr);
+      context.cuda_stream, state.width * state.height, (vec4f*)nullptr);
   state.albedo = make_buffer(
       context.cuda_stream, state.width * state.height, (vec3f*)nullptr);
   state.normal = make_buffer(
@@ -879,17 +602,18 @@ cutrace_state make_cutrace_state(cutrace_context& context,
       context.cuda_stream, state.width * state.height, (int*)nullptr);
   state.rngs = make_buffer(
       context.cuda_stream, state.width * state.height, (rng_state*)nullptr);
-  if (params.denoise) {
-    auto denoiser_sizes = OptixDenoiserSizes{};
-    check_result(optixDenoiserComputeMemoryResources(
-        context.denoiser, state.width, state.height, &denoiser_sizes));
-    state.denoised = make_buffer(
-        context.cuda_stream, state.width * state.height, (vec4f*)nullptr);
-    state.denoiser_state = make_buffer(
-        context.cuda_stream, denoiser_sizes.stateSizeInBytes, (byte*)nullptr);
-    state.denoiser_scratch = make_buffer(context.cuda_stream,
-        denoiser_sizes.withoutOverlapScratchSizeInBytes, (byte*)nullptr);
-  }
+  // if (params.denoise) {
+  //   auto denoiser_sizes = OptixDenoiserSizes{};
+  //   check_result(optixDenoiserComputeMemoryResources(
+  //       context.denoiser, state.width, state.height, &denoiser_sizes));
+  //   state.denoised = make_buffer(
+  //       context.cuda_stream, state.width * state.height, (vec4f*)nullptr);
+  //   state.denoiser_state = make_buffer(
+  //       context.cuda_stream, denoiser_sizes.stateSizeInBytes,
+  //       (byte*)nullptr);
+  //   state.denoiser_scratch = make_buffer(context.cuda_stream,
+  //       denoiser_sizes.withoutOverlapScratchSizeInBytes, (byte*)nullptr);
+  // }
   sync_gpu(context.cuda_stream);
   return state;
 };
@@ -915,21 +639,21 @@ void reset_cutrace_state(cutrace_context& context, cutrace_state& state,
       (int*)nullptr);
   resize_buffer(context.cuda_stream, state.rngs, state.width * state.height,
       (rng_state*)nullptr);
-  if (params.denoise) {
-    auto denoiser_sizes = OptixDenoiserSizes{};
-    check_result(optixDenoiserComputeMemoryResources(
-        context.denoiser, state.width, state.height, &denoiser_sizes));
-    resize_buffer(context.cuda_stream, state.denoised,
-        state.width * state.height, (vec4f*)nullptr);
-    resize_buffer(context.cuda_stream, state.denoiser_state,
-        denoiser_sizes.stateSizeInBytes, (byte*)nullptr);
-    resize_buffer(context.cuda_stream, state.denoiser_scratch,
-        denoiser_sizes.withoutOverlapScratchSizeInBytes, (byte*)nullptr);
-  } else {
-    clear_buffer(state.denoised);
-    clear_buffer(state.denoiser_state);
-    clear_buffer(state.denoiser_scratch);
-  }
+  // if (params.denoise) {
+  //   auto denoiser_sizes = OptixDenoiserSizes{};
+  //   check_result(optixDenoiserComputeMemoryResources(
+  //       context.denoiser, state.width, state.height, &denoiser_sizes));
+  //   resize_buffer(context.cuda_stream, state.denoised,
+  //       state.width * state.height, (vec4f*)nullptr);
+  //   resize_buffer(context.cuda_stream, state.denoiser_state,
+  //       denoiser_sizes.stateSizeInBytes, (byte*)nullptr);
+  //   resize_buffer(context.cuda_stream, state.denoiser_scratch,
+  //       denoiser_sizes.withoutOverlapScratchSizeInBytes, (byte*)nullptr);
+  // } else {
+  //   clear_buffer(state.denoised);
+  //   clear_buffer(state.denoiser_state);
+  //   clear_buffer(state.denoiser_scratch);
+  // }
   sync_gpu(context.cuda_stream);
 }
 
@@ -951,11 +675,12 @@ cutrace_lights make_cutrace_lights(cutrace_context& context,
 }
 
 // Copmutes an image
-image_data cutrace_image(const scene_data& scene, const trace_params& params) {
+image_data cutrace_image(const scene_data& scene, const trace_params& params,
+    const scene_bvh& bvh_cpu) {
   // initialization
   auto context = make_cutrace_context(params);
   auto cuscene = make_cutrace_scene(context, scene, params);
-  auto bvh     = make_cutrace_bvh(context, cuscene, params);
+  auto bvh     = make_cutrace_bvh(context, cuscene, params, bvh_cpu);
   auto state   = make_cutrace_state(context, scene, params);
   auto lights  = make_cutrace_lights(context, scene, params);
 
@@ -1080,39 +805,7 @@ void get_normal_image(image_data& image, const cutrace_state& state) {
 }
 
 // denoise image
-void denoise_image(cutrace_context& context, cutrace_state& state) {
-  // denoiser setup
-  check_result(optixDenoiserSetup(context.denoiser, context.cuda_stream,
-      state.width, state.height, state.denoiser_state.device_ptr(),
-      state.denoiser_state.size_in_bytes(), state.denoiser_scratch.device_ptr(),
-      state.denoiser_scratch.size_in_bytes()));
-
-  // params
-  auto dparams = OptixDenoiserParams{};
-
-  // layers
-  auto guides   = OptixDenoiserGuideLayer{};
-  guides.albedo = OptixImage2D{state.albedo.device_ptr(), (uint)state.width,
-      (uint)state.height, (uint)state.width * sizeof(vec3f), sizeof(vec3f),
-      OPTIX_PIXEL_FORMAT_FLOAT3};
-  guides.normal = OptixImage2D{state.normal.device_ptr(), (uint)state.width,
-      (uint)state.height, (uint)state.width * sizeof(vec3f), sizeof(vec3f),
-      OPTIX_PIXEL_FORMAT_FLOAT3};
-  auto layers   = OptixDenoiserLayer{};
-  layers.input  = OptixImage2D{state.image.device_ptr(), (uint)state.width,
-      (uint)state.height, (uint)state.width * sizeof(vec4f), sizeof(vec4f),
-      OPTIX_PIXEL_FORMAT_FLOAT4};
-  layers.output = OptixImage2D{state.denoised.device_ptr(), (uint)state.width,
-      (uint)state.height, (uint)state.width * sizeof(vec4f), sizeof(vec4f),
-      OPTIX_PIXEL_FORMAT_FLOAT4};
-
-  // denoiser execution
-  check_result(optixDenoiserInvoke(context.denoiser, context.cuda_stream,
-      &dparams, state.denoiser_state.device_ptr(),
-      state.denoiser_state.size_in_bytes(), &guides, &layers, 1, 0, 0,
-      state.denoiser_scratch.device_ptr(),
-      state.denoiser_scratch.size_in_bytes()));
-}
+void denoise_image(cutrace_context& context, cutrace_state& state) {}
 
 bool is_display(const cutrace_context& context) {
   auto device = 0, is_display = 0;
@@ -1123,3 +816,5 @@ bool is_display(const cutrace_context& context) {
 }
 
 }  // namespace yocto
+
+#endif

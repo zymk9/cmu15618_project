@@ -4,9 +4,10 @@
 // A CUDA version of yocto/trace for CMU 15-618 F23 final project.
 //
 
-
 #ifndef _CUDA_TRACE_H_
 #define _CUDA_TRACE_H_
+
+#if defined(YOCTO_CUDA) && defined(CUSTOM_CUDA)
 
 // -----------------------------------------------------------------------------
 // INCLUDES
@@ -38,7 +39,8 @@ using std::vector;
 namespace yocto {
 
 // Progressively computes an image.
-image_data cutrace_image(const scene_data& scene, const trace_params& params);
+image_data cutrace_image(
+    const scene_data& scene, const trace_params& params, const scene_bvh& bvh);
 
 }  // namespace yocto
 
@@ -65,8 +67,9 @@ void update_cutrace_cameras(cutrace_context& context, cuscene_data& cuscene,
     const scene_data& scene, const trace_params& params);
 
 // Build the bvh acceleration structure.
-cutrace_bvh make_cutrace_bvh(cutrace_context& context,
-    const cuscene_data& cuscene, const trace_params& params);
+cuscene_bvh make_cutrace_bvh(cutrace_context& context,
+    const cuscene_data& cuscene, const trace_params& params,
+    const scene_bvh& bvh);
 
 // Initialize state.
 cutrace_state make_cutrace_state(cutrace_context& context,
@@ -146,6 +149,8 @@ inline const auto cutrace_falsecolor_labels = trace_falsecolor_labels;
 
 // do not reorder
 #include <cuda.h>
+#include <cuda_runtime.h>
+#include <driver_functions.h>
 // do not reorder
 #include <optix.h>
 
@@ -162,8 +167,8 @@ struct cuspan {
   CUdeviceptr device_ptr() const { return _data; }
   size_t      size_in_bytes() const { return _size * sizeof(T); }
   void        swap(cuspan& other) {
-           std::swap(_data, other._data);
-           std::swap(_size, other._size);
+    std::swap(_data, other._data);
+    std::swap(_size, other._size);
   }
 
   CUdeviceptr _data = 0;
@@ -252,8 +257,8 @@ struct cuscene_data {
 };
 
 struct cubvh_tree {
-  cuspan<byte>           buffer = {};
-  OptixTraversableHandle handle = 0;
+  cuspan<bvh_node> nodes      = {};
+  cuspan<int>      primitives = {};
 
   cubvh_tree() {}
   cubvh_tree(cubvh_tree&&);
@@ -271,9 +276,8 @@ struct cushape_bvh {
 };
 
 struct cuscene_bvh {
-  cubvh_tree            bvh       = {};
-  vector<cushape_bvh>   shapes    = {};
-  cuspan<OptixInstance> instances = {};
+  cubvh_tree          bvh    = {};
+  cuspan<cushape_bvh> shapes = {};
 
   cuscene_bvh() {}
   cuscene_bvh(cuscene_bvh&&);
@@ -320,11 +324,11 @@ struct cutrace_lights {
 
 // device params
 struct cutrace_globals {
-  cutrace_state          state  = {};
-  cuscene_data           scene  = {};
-  OptixTraversableHandle bvh    = {};
-  cutrace_lights         lights = {};
-  trace_params           params = {};
+  cutrace_state  state  = {};
+  cuscene_data   scene  = {};
+  cuscene_bvh    bvh    = {};
+  cutrace_lights lights = {};
+  trace_params   params = {};
 };
 
 // empty stb record
@@ -335,30 +339,13 @@ struct __declspec(align(OPTIX_SBT_RECORD_ALIGNMENT)) cutrace_stbrecord {
 
 struct cutrace_context {
   // context
-  CUcontext          cuda_context  = nullptr;
-  CUstream           cuda_stream   = nullptr;
-  OptixDeviceContext optix_context = nullptr;
-
-  // pipeline
-  OptixPipeline optix_pipeline = nullptr;
-  OptixModule   optix_module   = nullptr;
-
-  // programs
-  OptixProgramGroup raygen_program   = nullptr;
-  OptixProgramGroup miss_program     = nullptr;
-  OptixProgramGroup hitgroup_program = nullptr;
-
-  // stb
-  cuspan<cutrace_stbrecord> raygen_records   = {};
-  cuspan<cutrace_stbrecord> miss_records     = {};
-  cuspan<cutrace_stbrecord> hitgroup_records = {};
-  OptixShaderBindingTable   binding_table    = {};
+  CUcontext cuda_context = nullptr;
+  CUstream  cuda_stream  = nullptr;
 
   // global buffer
   cuspan<cutrace_globals> globals_buffer = {};
 
-  // denoiser
-  OptixDenoiser denoiser = nullptr;
+  vector<cushape_bvh> shape_bvhs = {};
 
   cutrace_context() {}
   cutrace_context(cutrace_context&&);
@@ -367,5 +354,7 @@ struct cutrace_context {
 };
 
 }  // namespace yocto
+
+#endif
 
 #endif

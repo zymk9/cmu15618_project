@@ -36,7 +36,7 @@
 #ifndef _YOCTO_CUTRACE_H_
 #define _YOCTO_CUTRACE_H_
 
-#ifdef YOCTO_CUDA
+#if defined(YOCTO_CUDA) && !defined(CUSTOM_CUDA)
 
 // -----------------------------------------------------------------------------
 // INCLUDES
@@ -192,8 +192,8 @@ struct cuspan {
   CUdeviceptr device_ptr() const { return _data; }
   size_t      size_in_bytes() const { return _size * sizeof(T); }
   void        swap(cuspan& other) {
-           std::swap(_data, other._data);
-           std::swap(_size, other._size);
+    std::swap(_data, other._data);
+    std::swap(_size, other._size);
   }
 
   CUdeviceptr _data = 0;
