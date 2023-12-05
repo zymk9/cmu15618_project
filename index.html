@@ -24,7 +24,7 @@
 
 
     <!-- mirror: F0%9F%AA%9E&lt -->
-    <link rel="icon" href="data:image/svg+xml,&lt;svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22&gt;&lt;text y=%22.9em%22 font-size=%2290%22&gt;%E2%9C%A8&lt;/text&gt;&lt;/svg&gt;">
+    <!-- <link rel="icon" href="data:image/svg+xml,&lt;svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22&gt;&lt;text y=%22.9em%22 font-size=%2290%22&gt;%E2%9C%A8&lt;/text&gt;&lt;/svg&gt;"> -->
     <link rel="stylesheet" href="css/bootstrap.min.css">
     <link rel="stylesheet" href="css/font-awesome.min.css">
     <link rel="stylesheet" href="css/codemirror.min.css">
@@ -77,11 +77,56 @@
                                 <h4><strong>Project Proposal</strong></h4>
                             </a>
                         </li>
+                        <li>
+                            <a href="./file/milestone.pdf">
+                                <h4><strong>Milestone Report</strong></h4>
+                            </a>
+                        </li>
                     </ul>
                 </div>
         </div>
 
+        <div class="row">
+            <div class="col-md-8 col-md-offset-2">
+                <h3>
+                    Updated Schedule
+                </h3>
+                <ul>
+                    <li>Nov 15 - Nov 21: <b>(Completed)</b> Get started on the CPU path tracer codebase. Start to implement the megakernel CUDA version. </li>
+                    <li>Nov 21 - Nov 27: <b>(Completed)</b> Complete the megakernel version. Start implementing the wavefront version. </li>
+                    <li>Nov 28 - Dec 3 <b>(Ongoing, milestone due)</b>: Complete the wavefront version. Explore different pipelines, optimizations, and design choices. </li>
+                    <li>Dec 4 - Dec 7: Add wavefront design (pipelining) to BVH traversal, switch to "wider" BVH, and parallel ray-triangle intersection test. </li>
+                    <li>Dec 8 - Dec 11: Add wavefront design to ray generation and material/shading evaluation. </li>
+                    <li>Dec 12 - Dec 15: Test and profile different implementations on different scenes. Analyze the workload and performance. Prepare the final report and poster session. </li>
+                </ul>
+            </div>
+        </div>
 
+        <div class="row">
+            <div class="col-md-8 col-md-offset-2">
+                <h3>
+                    Work Done So Far
+                </h3>
+                <p class="text-justify">
+                    We have completed implementing a CUDA version of an existing CPU path tracer using the naive megakernel approach, i.e., one CUDA thread is responsible for the whole procedure of ray generation, intersection tests, shading evaluation, ray extension, and image updating. All scene data (geometry, acceleration structures, lightings, materials, cameras) are stored in GPU global memory.
+                    <br><br>
+                    We also tried to directly use the CPU version of the BVH (i.e., a binary tree with large tree height and small leaf node size) in CUDA for ray-instance intersection, and a sequential ray-triangle intersection test in the leaf nodes. We measured some preliminary performance and compared to the CPU and the OptiX hardware accelerated version.            
+                </p>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-8 col-md-offset-2">
+                <h3>
+                    Goals and Deliverables
+                </h3>
+                <p class="text-justify">
+                    We are slightly behind our previous schedule, but the next direction is clear and the overall progress is smooth. Hence, we are still confident that we can achieve the following goals and present the listed deliverables.
+                    <br><br>
+                    As for the "nice to have" goals in case we have extra time, we might not be able to try SIMD implementation on CPU, or implement a heterogeneous version using both CPU and GPU, but we may still try to accelerate BVH construction using GPU, or including BVH refitting for animated scenes. We may also try to incorporate the hardware accelerated ray-triangle intersection test into our pipeline.
+                </p>
+            </div>
+        </div>
 
         <!-- <div class="row">
             <div class="col-md-8 col-md-offset-2">
@@ -92,6 +137,50 @@
                 </div>
 			</div>
         </div> -->
+
+        <div class="row">
+            <div class="col-md-8 col-md-offset-2">
+                <h3>
+                    Preliminary Results
+                </h3>
+                <p class="text-justify">
+                    We ran our current megakernel version of the path tracer on several different scenes and compare its performance to the CPU version and the implementation using OptiX (thus NVIDIA's RT cores) hardware accelerated intersection tests. Note that the OptiX version uses the same megekernel design.                    
+
+                <table width="100%">
+                    <tr>
+                        <td align="left" valign="top" width="50%">
+                            <img src="./img/dragon.jpg" width="100%">
+                        </td>
+                        <td align="left" valign="top" width="50%">
+                            <img src="./img/dining-room.png" width="100%">
+                        </td>
+                    </tr>
+                    <tr>
+                        <td align="left" valign="top" width="50%">
+                            <img src="./img/kitchen.png" width="100%">
+                        </td>
+                        <td align="left" valign="top" width="50%">
+                            <img src="./img/landscape.png" width="100%">
+                        </td>
+                    </tr>
+                </table>
+                <div class="text-center">
+                    The scenes are from Benedikt Bitterli's <a href="https://benedikt-bitterli.me/resources/">rendering resources</a> 
+                    and <a href="https://github.com/mmp/pbrt-v4-scenes#landscape">PBRT-v4's repo</a>.
+                </div>
+                <br>
+                We use scenes of different geometry complexity and shading complexity (variety of materials and lightings). The <i>dragon</i> scene contains a single object with simple material, whereas the <i>landscape</i> contains 23,241 plant models and 3.1B triangles. The other two scenes sit inbetween and feature different sets of materials.
+                <br><br>
+                As this is simply the preliminary results to get a sense of the performance bottleneck and optimization direction, we only time the total rendering time for rendering 1 sample-per-pixel (spp) for a 1280x720 image, and average the rendering time over 64 samples.
+                <br><br>
+                <table style="border-collapse:collapse;border-spacing:0;margin:0px auto" class="tg"><thead><tr><th style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;font-weight:bold;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">Time (s)</th><th style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;font-weight:bold;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">Dragon</th><th style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;font-weight:bold;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">The Breakfast Room</th><th style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;font-weight:bold;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">Country Kitchen</th><th style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;font-weight:bold;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">Landscape</th></tr></thead><tbody><tr><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">CPU</td><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">0.0811</td><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">0.4537</td><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">0.6665</td><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">5.7601</td></tr><tr><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">CUDA</td><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">0.0180</td><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">0.1346</td><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">0.1292</td><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">2.7245</td></tr><tr><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">OptiX</td><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">0.0076</td><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">0.0203</td><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">0.0243</td><td style="border-color:inherit;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;overflow:hidden;padding:10px 5px;text-align:left;vertical-align:top;word-break:normal">0.0888</td></tr></tbody></table>
+
+                <br><br>
+                From the table, we can see that even with the naive megakernel design, the CUDA implementation can still achieves 2x-5x speedup compared to the CPU implementation. However, considering that path tracing is massively parallelizable, this speedup is clearly unsatisfactory, and the main reason is the extremely high divergence occured during BVH traversal, ray extension, and shading evaluation.
+                <br><br>
+                Comparing the performance of CUDA and of OptiX implementation, we found that the performance of ray-scene intersection test is crucial for the overall rendering performance, especially in scenes with highly complex geometries. Therefore, the first optimization we plan to implement for our wavefront version is to make the BVH traversal a separate pipeline stage. We need to make the BVH "wider" by increasing the fan-out width and decreasing the tree height, which reduces the costly pointer chasing and allows us to parallelize ray-box/ray-triangle intersection test over all threads within a group. We do not expect that this can reach the same speedup as the OptiX version, but it will be a significant optimization to consider first.
+            </div>
+        </div>
 
 
         <div class="row">
@@ -329,18 +418,6 @@
                     <li>Dec 4 - Dec 10: Test and profile different implementations on different scenes. Analyze the workload and performance.</li>
                     <li>Dec 11 - Dec 15: Prepare the final report and poster session.</li>
                 </ul>
-
-                <!-- <div class="form-group col-md-10 col-md-offset-1">
-                    <textarea id="bibtex" class="form-control" readonly>
-@article{verbin2022refnerf,
-    title={{Ref-NeRF}: Structured View-Dependent Appearance for
-           Neural Radiance Fields},
-    author={Dor Verbin and Peter Hedman and Ben Mildenhall and
-            Todd Zickler and Jonathan T. Barron and Pratul P. Srinivasan},
-    journal={CVPR},
-    year={2022}
-}</textarea>
-                </div> -->
             </div>
         </div>
 
