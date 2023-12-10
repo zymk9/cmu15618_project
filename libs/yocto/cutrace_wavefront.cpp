@@ -4,8 +4,7 @@
 
 #include "cutrace_wavefront.h"
 
-// #if defined(YOCTO_CUDA) && defined(CUSTOM_CUDA) && defined(WAVEFRONT)
-#if 1
+#if defined(YOCTO_CUDA) && defined(CUSTOM_CUDA) && defined(WAVEFRONT)
 
 #include "yocto_sampling.h"
 

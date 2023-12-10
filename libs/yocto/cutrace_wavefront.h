@@ -8,8 +8,7 @@
 #ifndef _CUTRACE_WAVEFRONT_H_
 #define _CUTRACE_WAVEFRONT_H_
 
-// #if defined(YOCTO_CUDA) && defined(CUSTOM_CUDA) && defined(WAVEFRONT)
-#if 1
+#if defined(YOCTO_CUDA) && defined(CUSTOM_CUDA) && defined(WAVEFRONT)
 
 // -----------------------------------------------------------------------------
 // INCLUDES
@@ -377,12 +376,6 @@ struct cutrace_globals {
   cuscene_bvh    bvh    = {};
   cutrace_lights lights = {};
   trace_params   params = {};
-};
-
-// empty stb record
-struct __declspec(align(OPTIX_SBT_RECORD_ALIGNMENT)) cutrace_stbrecord {
-  __declspec(align(
-      OPTIX_SBT_RECORD_ALIGNMENT)) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
 };
 
 struct cutrace_context {

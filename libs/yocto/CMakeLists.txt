@@ -76,7 +76,8 @@ if(CUSTOM_CUDA)
     add_library(cuda_trace_device cuda_trace.cu)
   endif(WAVEFRONT)
 
-  target_compile_options(cuda_trace_device PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
+  set_target_properties(cuda_trace_device PROPERTIES CUDA_STANDARD 17)
+  target_compile_options(cuda_trace_device PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr -std=c++17>)
   target_compile_definitions(yocto PUBLIC -DCUSTOM_CUDA)
 
   target_link_libraries(yocto PUBLIC OptiX::OptiX cuda_trace_device CUDA::cuda_driver CUDA::cudart_static)

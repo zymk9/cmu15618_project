@@ -331,12 +331,6 @@ struct cutrace_globals {
   trace_params   params = {};
 };
 
-// empty stb record
-struct __declspec(align(OPTIX_SBT_RECORD_ALIGNMENT)) cutrace_stbrecord {
-  __declspec(align(
-      OPTIX_SBT_RECORD_ALIGNMENT)) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
-};
-
 struct cutrace_context {
   // context
   CUcontext cuda_context = nullptr;

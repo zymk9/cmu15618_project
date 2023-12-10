@@ -56,7 +56,7 @@ using std::pair;
 // CUDA SUPPORT
 // -----------------------------------------------------------------------------
 #ifdef __CUDACC__
-#define inline inline __device__ __forceinline__
+#define inline __device__ __forceinline__
 #endif
 
 // -----------------------------------------------------------------------------

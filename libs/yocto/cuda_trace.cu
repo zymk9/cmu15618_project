@@ -164,13 +164,6 @@ inline void packPointer(void* ptr, uint32_t& i0, uint32_t& i1) {
   i1                  = uptr & 0x00000000ffffffff;
 }
 
-template <typename T>
-inline T* getPRD() {
-  const uint32_t u0 = optixGetPayload_0();
-  const uint32_t u1 = optixGetPayload_1();
-  return reinterpret_cast<T*>(unpackPointer(u0, u1));
-}
-
 }  // namespace yocto
 
 // -----------------------------------------------------------------------------
