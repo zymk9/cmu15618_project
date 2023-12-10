@@ -1,10 +1,11 @@
 //
-// Implementation for cuda_trace.
+// Implementation for cutrace_wavefront.
 //
 
-#include "cuda_trace.h"
+#include "cutrace_wavefront.h"
 
-#if defined(YOCTO_CUDA) && defined(CUSTOM_CUDA) && !defined(WAVEFRONT)
+// #if defined(YOCTO_CUDA) && defined(CUSTOM_CUDA) && defined(WAVEFRONT)
+#if 1
 
 #include "yocto_sampling.h"
 
@@ -257,11 +258,14 @@ cutrace_state::cutrace_state(cutrace_state&& other) {
   image.swap(other.image);
   albedo.swap(other.albedo);
   normal.swap(other.normal);
-  hits.swap(other.hits);
+  pixel_samples.swap(other.pixel_samples);
   rngs.swap(other.rngs);
   denoised.swap(other.denoised);
   denoiser_state.swap(other.denoiser_state);
   denoiser_scratch.swap(other.denoiser_scratch);
+
+  path         = std::move(other.path);
+  intersection = std::move(other.intersection);
 }
 cutrace_state& cutrace_state::operator=(cutrace_state&& other) {
   std::swap(width, other.width);
@@ -270,22 +274,90 @@ cutrace_state& cutrace_state::operator=(cutrace_state&& other) {
   image.swap(other.image);
   albedo.swap(other.albedo);
   normal.swap(other.normal);
-  hits.swap(other.hits);
+  pixel_samples.swap(other.pixel_samples);
   rngs.swap(other.rngs);
   denoised.swap(other.denoised);
   denoiser_state.swap(other.denoiser_state);
   denoiser_scratch.swap(other.denoiser_scratch);
+
+  path         = std::move(other.path);
+  intersection = std::move(other.intersection);
   return *this;
 }
 cutrace_state::~cutrace_state() {
   clear_buffer(image);
   clear_buffer(albedo);
   clear_buffer(normal);
-  clear_buffer(hits);
+  clear_buffer(pixel_samples);
   clear_buffer(rngs);
   clear_buffer(denoised);
   clear_buffer(denoiser_state);
   clear_buffer(denoiser_scratch);
+}
+
+cutrace_path::cutrace_path(cutrace_path&& other) {
+  radiance.swap(other.radiance);
+  weights.swap(other.weights);
+  rays.swap(other.rays);
+  volume_back.swap(other.volume_back);
+  volume_empty.swap(other.volume_empty);
+  max_roughness.swap(other.max_roughness);
+  hit.swap(other.hit);
+  hit_albedo.swap(other.hit_albedo);
+  hit_normal.swap(other.hit_normal);
+  opbounces.swap(other.opbounces);
+  bounces.swap(other.bounces);
+}
+cutrace_path& cutrace_path::operator=(cutrace_path&& other) {
+  radiance.swap(other.radiance);
+  weights.swap(other.weights);
+  rays.swap(other.rays);
+  volume_back.swap(other.volume_back);
+  volume_empty.swap(other.volume_empty);
+  max_roughness.swap(other.max_roughness);
+  hit.swap(other.hit);
+  hit_albedo.swap(other.hit_albedo);
+  hit_normal.swap(other.hit_normal);
+  opbounces.swap(other.opbounces);
+  bounces.swap(other.bounces);
+  return *this;
+}
+cutrace_path::~cutrace_path() {
+  clear_buffer(radiance);
+  clear_buffer(weights);
+  clear_buffer(rays);
+  clear_buffer(volume_back);
+  clear_buffer(volume_empty);
+  clear_buffer(max_roughness);
+  clear_buffer(hit);
+  clear_buffer(hit_albedo);
+  clear_buffer(hit_normal);
+  clear_buffer(opbounces);
+  clear_buffer(bounces);
+}
+
+cutrace_intersection::cutrace_intersection(cutrace_intersection&& other) {
+  instance.swap(other.instance);
+  element.swap(other.element);
+  uv.swap(other.uv);
+  distance.swap(other.distance);
+  hit.swap(other.hit);
+}
+cutrace_intersection& cutrace_intersection::operator=(
+    cutrace_intersection&& other) {
+  instance.swap(other.instance);
+  element.swap(other.element);
+  uv.swap(other.uv);
+  distance.swap(other.distance);
+  hit.swap(other.hit);
+  return *this;
+}
+cutrace_intersection::~cutrace_intersection() {
+  clear_buffer(instance);
+  clear_buffer(element);
+  clear_buffer(uv);
+  clear_buffer(distance);
+  clear_buffer(hit);
 }
 
 cutrace_lights::cutrace_lights(cutrace_lights&& other) {
@@ -592,16 +664,22 @@ cutrace_state make_cutrace_state(cutrace_context& context,
     state.width  = (int)round(params.resolution * camera.aspect);
   }
   state.samples = 0;
-  state.image   = make_buffer(
+
+  state.image = make_buffer(
       context.cuda_stream, state.width * state.height, (vec4f*)nullptr);
   state.albedo = make_buffer(
       context.cuda_stream, state.width * state.height, (vec3f*)nullptr);
   state.normal = make_buffer(
       context.cuda_stream, state.width * state.height, (vec3f*)nullptr);
-  state.hits = make_buffer(
+  state.pixel_samples = make_buffer(
       context.cuda_stream, state.width * state.height, (int*)nullptr);
   state.rngs = make_buffer(
       context.cuda_stream, state.width * state.height, (rng_state*)nullptr);
+
+  state.path         = make_cutrace_path(context, state.width, state.height);
+  state.intersection = make_cutrace_intersection(
+      context, state.width, state.height);
+
   // if (params.denoise) {
   //   auto denoiser_sizes = OptixDenoiserSizes{};
   //   check_result(optixDenoiserComputeMemoryResources(
@@ -629,16 +707,22 @@ void reset_cutrace_state(cutrace_context& context, cutrace_state& state,
     state.width  = (int)round(params.resolution * camera.aspect);
   }
   state.samples = 0;
+
   resize_buffer(context.cuda_stream, state.image, state.width * state.height,
       (vec4f*)nullptr);
   resize_buffer(context.cuda_stream, state.albedo, state.width * state.height,
       (vec3f*)nullptr);
   resize_buffer(context.cuda_stream, state.normal, state.width * state.height,
       (vec3f*)nullptr);
-  resize_buffer(context.cuda_stream, state.hits, state.width * state.height,
-      (int*)nullptr);
+  resize_buffer(context.cuda_stream, state.pixel_samples,
+      state.width * state.height, (int*)nullptr);
   resize_buffer(context.cuda_stream, state.rngs, state.width * state.height,
       (rng_state*)nullptr);
+
+  state.path         = make_cutrace_path(context, state.width, state.height);
+  state.intersection = make_cutrace_intersection(
+      context, state.width, state.height);
+
   // if (params.denoise) {
   //   auto denoiser_sizes = OptixDenoiserSizes{};
   //   check_result(optixDenoiserComputeMemoryResources(
@@ -655,6 +739,54 @@ void reset_cutrace_state(cutrace_context& context, cutrace_state& state,
   //   clear_buffer(state.denoiser_scratch);
   // }
   sync_gpu(context.cuda_stream);
+}
+
+// Allocate buffers for path tracing state.
+cutrace_path make_cutrace_path(
+    cutrace_context& context, int width, int height) {
+  auto path       = cutrace_path{};
+  auto num_pixels = width * height;
+
+  path.radiance = make_buffer(context.cuda_stream, num_pixels, (vec3f*)nullptr);
+  path.weights  = make_buffer(context.cuda_stream, num_pixels, (vec3f*)nullptr);
+  path.rays     = make_buffer(context.cuda_stream, num_pixels, (ray3f*)nullptr);
+  path.volume_back = make_buffer(
+      context.cuda_stream, num_pixels, (material_point*)nullptr);
+  path.volume_empty = make_buffer(
+      context.cuda_stream, num_pixels, (bool*)nullptr);
+  path.max_roughness = make_buffer(
+      context.cuda_stream, num_pixels, (float*)nullptr);
+  path.hit = make_buffer(context.cuda_stream, num_pixels, (bool*)nullptr);
+  path.hit_albedo = make_buffer(
+      context.cuda_stream, num_pixels, (vec3f*)nullptr);
+  path.hit_normal = make_buffer(
+      context.cuda_stream, num_pixels, (vec3f*)nullptr);
+  path.opbounces = make_buffer(context.cuda_stream, num_pixels, (int*)nullptr);
+  path.bounces   = make_buffer(context.cuda_stream, num_pixels, (int*)nullptr);
+
+  sync_gpu(context.cuda_stream);
+  return path;
+}
+
+// Allocate buffers for intersection state.
+cutrace_intersection make_cutrace_intersection(
+    cutrace_context& context, int width, int height) {
+  auto intersection = cutrace_intersection{};
+  auto num_pixels   = width * height;
+
+  intersection.instance = make_buffer(
+      context.cuda_stream, num_pixels, (int*)nullptr);
+  intersection.element = make_buffer(
+      context.cuda_stream, num_pixels, (int*)nullptr);
+  intersection.uv = make_buffer(
+      context.cuda_stream, num_pixels, (vec2f*)nullptr);
+  intersection.distance = make_buffer(
+      context.cuda_stream, num_pixels, (float*)nullptr);
+  intersection.hit = make_buffer(
+      context.cuda_stream, num_pixels, (bool*)nullptr);
+
+  sync_gpu(context.cuda_stream);
+  return intersection;
 }
 
 // Init trace lights
@@ -678,11 +810,14 @@ cutrace_lights make_cutrace_lights(cutrace_context& context,
 image_data cutrace_image(const scene_data& scene, const trace_params& params,
     const scene_bvh& bvh_cpu) {
   // initialization
-  auto context = make_cutrace_context(params);
-  auto cuscene = make_cutrace_scene(context, scene, params);
-  auto bvh     = make_cutrace_bvh(context, cuscene, params, bvh_cpu);
-  auto state   = make_cutrace_state(context, scene, params);
-  auto lights  = make_cutrace_lights(context, scene, params);
+  auto context      = make_cutrace_context(params);
+  auto cuscene      = make_cutrace_scene(context, scene, params);
+  auto bvh          = make_cutrace_bvh(context, cuscene, params, bvh_cpu);
+  auto state        = make_cutrace_state(context, scene, params);
+  auto lights       = make_cutrace_lights(context, scene, params);
+  auto path         = make_cutrace_path(context, state.width, state.height);
+  auto intersection = make_cutrace_intersection(
+      context, state.width, state.height);
 
   // rendering
   trace_start(context, state, cuscene, bvh, lights, scene, params);

@@ -12,6 +12,7 @@ add_library(yocto STATIC
   yocto_gui.h yocto_gui.cpp
   yocto_cutrace.h yocto_cutrace.cpp
   cuda_trace.h cuda_trace.cpp
+  cutrace_wavefront.h cutrace_wavefront.cpp
   yocto_parallel.h yocto_cli.h
 )
 
@@ -68,7 +69,13 @@ target_compile_definitions(yocto PUBLIC -DYOCTO_CUDA)
 find_package(CUDAToolkit REQUIRED)
 
 if(CUSTOM_CUDA)
-  add_library(cuda_trace_device cuda_trace.cu)
+  if(WAVEFRONT) 
+    add_library(cuda_trace_device cutrace_wavefront.cu)
+    target_compile_definitions(yocto PUBLIC -DWAVEFRONT)
+  else(WAVEFRONT)
+    add_library(cuda_trace_device cuda_trace.cu)
+  endif(WAVEFRONT)
+
   target_compile_options(cuda_trace_device PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
   target_compile_definitions(yocto PUBLIC -DCUSTOM_CUDA)
 

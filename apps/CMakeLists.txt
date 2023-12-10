@@ -16,10 +16,16 @@ add_yapp(yconverts)
 add_yapp(ysamples)
 
 if(YOCTO_CUDA)
+
 if(CUSTOM_CUDA)
-add_yapp(cuda_trace)
+  if(WAVEFRONT)
+    add_yapp(wavefront_trace)
+  else()
+    add_yapp(cuda_trace)
+  endif()
 else()
-add_yapp(ycutrace)
+  add_yapp(ycutrace)
 endif()
+
 endif()
 

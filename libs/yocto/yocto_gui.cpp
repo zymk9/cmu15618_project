@@ -38,10 +38,8 @@
 #include <future>
 #include <stdexcept>
 
-#ifdef CUSTOM_CUDA
 #include "cuda_trace.h"
-#include "yocto_trace.h"
-#endif
+#include "cutrace_wavefront.h"
 #include "yocto_cutrace.h"
 #include "yocto_geometry.h"
 

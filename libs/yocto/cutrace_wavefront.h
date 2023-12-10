@@ -1,13 +1,15 @@
 //
-// cuda_trace.h
+// cutrace_wavefront.h
 //
 // A CUDA version of yocto/trace for CMU 15-618 F23 final project.
+// Uses the wavefront path tracing algorithm.
 //
 
-#ifndef _CUDA_TRACE_H_
-#define _CUDA_TRACE_H_
+#ifndef _CUTRACE_WAVEFRONT_H_
+#define _CUTRACE_WAVEFRONT_H_
 
-#if defined(YOCTO_CUDA) && defined(CUSTOM_CUDA) && !defined(WAVEFRONT)
+// #if defined(YOCTO_CUDA) && defined(CUSTOM_CUDA) && defined(WAVEFRONT)
+#if 1
 
 // -----------------------------------------------------------------------------
 // INCLUDES
@@ -53,6 +55,8 @@ namespace yocto {
 struct cuscene_data;
 struct cuscene_bvh;
 struct cutrace_state;
+struct cutrace_path;
+struct cutrace_intersection;
 struct cutrace_lights;
 struct cutrace_context;
 using cutrace_bvh = cuscene_bvh;
@@ -76,6 +80,13 @@ cutrace_state make_cutrace_state(cutrace_context& context,
     const scene_data& scene, const trace_params& params);
 void reset_cutrace_state(cutrace_context& context, cutrace_state& state,
     const scene_data& scene, const trace_params& params);
+
+// Initialize path tracing buffers.
+cutrace_path make_cutrace_path(cutrace_context& context, int width, int height);
+
+// Initialize intersection buffers.
+cutrace_intersection make_cutrace_intersection(
+    cutrace_context& context, int width, int height);
 
 // Initialize lights.
 cutrace_lights make_cutrace_lights(cutrace_context& context,
@@ -285,6 +296,40 @@ struct cuscene_bvh {
   ~cuscene_bvh();
 };
 
+// path states
+struct cutrace_path {
+  cuspan<vec3f>          radiance      = {};
+  cuspan<vec3f>          weights       = {};
+  cuspan<ray3f>          rays          = {};
+  cuspan<material_point> volume_back   = {};
+  cuspan<bool>           volume_empty  = {};
+  cuspan<float>          max_roughness = {};
+  cuspan<bool>           hit           = {};
+  cuspan<vec3f>          hit_albedo    = {};
+  cuspan<vec3f>          hit_normal    = {};
+  cuspan<int>            opbounces     = {};
+  cuspan<int>            bounces       = {};
+
+  cutrace_path() {}
+  cutrace_path(cutrace_path&&);
+  cutrace_path& operator=(cutrace_path&&);
+  ~cutrace_path();
+};
+
+// intersections
+struct cutrace_intersection {
+  cuspan<int>   instance = {};
+  cuspan<int>   element  = {};
+  cuspan<vec2f> uv       = {};
+  cuspan<float> distance = {};
+  cuspan<bool>  hit      = {};
+
+  cutrace_intersection() {}
+  cutrace_intersection(cutrace_intersection&&);
+  cutrace_intersection& operator=(cutrace_intersection&&);
+  ~cutrace_intersection();
+};
+
 // state
 struct cutrace_state {
   int               width            = 0;
@@ -293,11 +338,14 @@ struct cutrace_state {
   cuspan<vec4f>     image            = {};
   cuspan<vec3f>     albedo           = {};
   cuspan<vec3f>     normal           = {};
-  cuspan<int>       hits             = {};
+  cuspan<int>       pixel_samples    = {};
   cuspan<rng_state> rngs             = {};
   cuspan<vec4f>     denoised         = {};
   cuspan<byte>      denoiser_state   = {};
   cuspan<byte>      denoiser_scratch = {};
+
+  cutrace_path         path         = {};
+  cutrace_intersection intersection = {};
 
   cutrace_state() {}
   cutrace_state(cutrace_state&&);
