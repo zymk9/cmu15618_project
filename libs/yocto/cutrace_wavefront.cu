@@ -175,6 +175,7 @@ constexpr int invalidid = -1;
 struct material_point;
 
 struct cutrace_path {
+  cuspan<int>            indices       = {};
   cuspan<vec3f>          radiance      = {};
   cuspan<vec3f>          weights       = {};
   cuspan<ray3f>          rays          = {};
@@ -196,6 +197,14 @@ struct cutrace_intersection {
   cuspan<bool>  hit      = {};
 };
 
+struct cutrace_sample {
+  ray3f ray      = {};
+  vec4f radiance = {};
+  vec3f albedo   = {};
+  vec3f normal   = {};
+  int   idx      = 0;
+};
+
 struct cutrace_state {
   int               width            = 0;
   int               height           = 0;
@@ -208,6 +217,8 @@ struct cutrace_state {
   cuspan<vec4f>     denoised         = {};
   cuspan<byte>      denoiser_state   = {};
   cuspan<byte>      denoiser_scratch = {};
+
+  cuspan<cutrace_sample> sample_queue = {};
 
   cutrace_path         path         = {};
   cutrace_intersection intersection = {};
@@ -722,8 +733,8 @@ struct shape_intersection {
   bool  hit      = false;
 };
 
-static shape_intersection intersect_shape_wbvh(
-    const cushape_bvh& sbvh, const shape_data& shape, const ray3f& ray_) {
+static shape_intersection intersect_shape_wbvh(const cushape_bvh& sbvh,
+    const shape_data& shape, const ray3f& ray_, bool find_any) {
   // get bvh tree
   auto& bvh = sbvh.bvh;
 
@@ -765,20 +776,23 @@ static shape_intersection intersect_shape_wbvh(
       for (auto idx = node.start; idx < node.start + node.num; idx++) {
         auto& t             = shape.triangles[bvh.primitives[idx]];
         auto  pintersection = intersect_triangle(ray, shape.positions[t.x],
-            shape.positions[t.y], shape.positions[t.z]);
+             shape.positions[t.y], shape.positions[t.z]);
         if (!pintersection.hit) continue;
         intersection = {bvh.primitives[idx], pintersection.uv,
             pintersection.distance, true};
         ray.tmax     = pintersection.distance;
       }
     }
+
+    // check for early exit
+    if (find_any && intersection.hit) return intersection;
   }
 
   return intersection;
 }
 
-static shape_intersection intersect_shape_bvh(
-    const cushape_bvh& sbvh, const shape_data& shape, const ray3f& ray_) {
+static shape_intersection intersect_shape_bvh(const cushape_bvh& sbvh,
+    const shape_data& shape, const ray3f& ray_, bool find_any) {
   // get bvh tree
   auto& bvh = sbvh.bvh;
 
@@ -826,20 +840,23 @@ static shape_intersection intersect_shape_bvh(
       for (auto idx = node.start; idx < node.start + node.num; idx++) {
         auto& t             = shape.triangles[bvh.primitives[idx]];
         auto  pintersection = intersect_triangle(ray, shape.positions[t.x],
-            shape.positions[t.y], shape.positions[t.z]);
+             shape.positions[t.y], shape.positions[t.z]);
         if (!pintersection.hit) continue;
         intersection = {bvh.primitives[idx], pintersection.uv,
             pintersection.distance, true};
         ray.tmax     = pintersection.distance;
       }
     }
+
+    // check for early exit
+    if (find_any && intersection.hit) return intersection;
   }
 
   return intersection;
 }
 
-static scene_intersection intersect_scene_wbvh(
-    const cuscene_bvh& sbvh, const scene_data& scene, const ray3f& ray_) {
+static scene_intersection intersect_scene_wbvh(const cuscene_bvh& sbvh,
+    const scene_data& scene, const ray3f& ray_, bool find_any) {
   // get instances bvh
   auto& bvh = sbvh.bvh;
 
@@ -882,20 +899,23 @@ static scene_intersection intersect_scene_wbvh(
         auto& instance_ = scene.instances[bvh.primitives[idx]];
         auto  inv_ray   = transform_ray(inverse(instance_.frame, true), ray);
         auto  sintersection = intersect_shape_wbvh(sbvh.shapes[instance_.shape],
-             scene.shapes[instance_.shape], inv_ray);
+             scene.shapes[instance_.shape], inv_ray, find_any);
         if (!sintersection.hit) continue;
         intersection = {bvh.primitives[idx], sintersection.element,
             sintersection.uv, sintersection.distance, true};
         ray.tmax     = sintersection.distance;
       }
     }
+
+    // check for early exit
+    if (find_any && intersection.hit) return intersection;
   }
 
   return intersection;
 }
 
-static scene_intersection intersect_scene_bvh(
-    const cuscene_bvh& sbvh, const scene_data& scene, const ray3f& ray_) {
+static scene_intersection intersect_scene_bvh(const cuscene_bvh& sbvh,
+    const scene_data& scene, const ray3f& ray_, bool find_any) {
   // get instances bvh
   auto& bvh = sbvh.bvh;
 
@@ -944,25 +964,27 @@ static scene_intersection intersect_scene_bvh(
         auto& instance_ = scene.instances[bvh.primitives[idx]];
         auto  inv_ray   = transform_ray(inverse(instance_.frame, true), ray);
         auto  sintersection = intersect_shape_bvh(sbvh.shapes[instance_.shape],
-             scene.shapes[instance_.shape], inv_ray);
+             scene.shapes[instance_.shape], inv_ray, find_any);
         if (!sintersection.hit) continue;
         intersection = {bvh.primitives[idx], sintersection.element,
             sintersection.uv, sintersection.distance, true};
         ray.tmax     = sintersection.distance;
       }
     }
+
+    // check for early exit
+    if (find_any && intersection.hit) return intersection;
   }
 
   return intersection;
 }
 
-static scene_intersection intersect_scene(
-    const cuscene_bvh& sbvh, const scene_data& scene, const ray3f& ray_) {
+static scene_intersection intersect_scene(const cuscene_bvh& sbvh,
+    const scene_data& scene, const ray3f& ray_, bool find_any) {
   if (globals.params.wbvh) {
-    return intersect_scene_wbvh(sbvh, scene, ray_);
-  }
-  else {
-    return intersect_scene_bvh(sbvh, scene, ray_);
+    return intersect_scene_wbvh(sbvh, scene, ray_, find_any);
+  } else {
+    return intersect_scene_bvh(sbvh, scene, ray_, find_any);
   }
 }
 
@@ -977,7 +999,7 @@ static scene_intersection intersect_instance(const trace_bvh& bvh,
   for (auto element = 0; element < shape.triangles.size(); element++) {
     auto& triangle = shape.triangles[element];
     auto  isec     = intersect_triangle(tray, shape.positions[triangle.x],
-        shape.positions[triangle.y], shape.positions[triangle.z]);
+             shape.positions[triangle.y], shape.positions[triangle.z]);
     if (!isec.hit) continue;
     intersection.hit      = true;
     intersection.instance = instance_id;
@@ -1307,7 +1329,7 @@ static float sample_lights_pdf(const scene_data& scene, const trace_bvh& bvh,
         auto i = clamp(
             (int)(texcoord.x * emission_tex.width), 0, emission_tex.width - 1);
         auto j    = clamp((int)(texcoord.y * emission_tex.height), 0,
-            emission_tex.height - 1);
+               emission_tex.height - 1);
         auto prob = sample_discrete_pdf(
                         light.elements_cdf, j * emission_tex.width + i) /
                     light.elements_cdf.back();
@@ -1349,7 +1371,7 @@ static trace_result trace_path(const scene_data& scene, const trace_bvh& bvh,
   // trace  path
   for (auto bounce = 0; bounce < params.bounces; bounce++) {
     // intersect next point
-    auto intersection = intersect_scene(bvh, scene, ray);
+    auto intersection = intersect_scene(bvh, scene, ray, false);
     if (!intersection.hit) {
       if (bounce > 0 || !params.envhidden)
         radiance += weight * eval_environment(scene, ray.d);
@@ -1636,21 +1658,26 @@ static bool eval_ray(const scene_data& scene, const trace_bvh& bvh,
   return false;
 }
 
-// generate a new primary ray from camera, at pixel (i, j),
-// and initaialize its path state
-static void raygen(cutrace_state& state, const cuscene_data& scene, int i,
-    int j, const trace_params& params) {
-  auto& camera = scene.cameras[params.camera];
-  // auto  sampler = get_trace_sampler_func(params);
-  auto idx = state.width * j + i;
-  auto ray = sample_camera(camera, {i, j}, {state.width, state.height},
-      rand2f(state.rngs[idx]), rand2f(state.rngs[idx]), params.tentfilter);
+static void fetch_sample(cutrace_state& state, const trace_params& params,
+    int idx, int* sample_queue_front) {
+  int queue_size = state.width * state.height * params.batch;
+  if (*sample_queue_front >= queue_size) {
+    state.path.indices[idx] = -1;
+    return;
+  }
+
+  int sample_idx = atomicAdd(sample_queue_front, 1);
+  if (sample_idx >= queue_size) {
+    state.path.indices[idx] = -1;
+    return;
+  }
 
   auto& path = state.path;
 
+  path.indices[idx]       = state.sample_queue[sample_idx].idx;
   path.radiance[idx]      = vec3f{0, 0, 0};
   path.weights[idx]       = vec3f{1, 1, 1};
-  path.rays[idx]          = ray;
+  path.rays[idx]          = state.sample_queue[sample_idx].ray;
   path.volume_back[idx]   = {};
   path.volume_empty[idx]  = true;
   path.max_roughness[idx] = 0.0f;
@@ -1663,59 +1690,60 @@ static void raygen(cutrace_state& state, const cuscene_data& scene, int i,
 
 static void trace_sample(cutrace_state& state, const cuscene_data& scene,
     const cutrace_bvh& bvh, const cutrace_lights& lights, int i, int j,
-    const trace_params& params, int* num_pixels_done) {
-  auto idx = state.width * j + i;
+    const trace_params& params, int* num_samples_done,
+    int* sample_queue_front) {
+  auto thread_idx = state.width * j + i;
+  auto sample_idx = state.path.indices[thread_idx];
+  if (sample_idx < 0) {
+    return;
+  }
+
+  auto pixel_idx = state.sample_queue[sample_idx].idx;
 
   auto result = eval_ray(scene, bvh, lights, state.path, state.intersection,
-      idx, state.rngs[idx], params);
-
-  auto sample = state.pixel_samples[idx];
+      thread_idx, state.rngs[pixel_idx], params);
 
   if (result) {
     // ray is terminated, update image and generate a new ray
     auto& path = state.path;
 
-    auto radiance = path.radiance[idx];
-    auto hit      = path.hit[idx];
-    auto albedo   = path.hit_albedo[idx];
-    auto normal   = path.hit_normal[idx];
-    auto ray      = path.rays[idx];
+    auto radiance = path.radiance[thread_idx];
+    auto hit      = path.hit[thread_idx];
+    auto albedo   = path.hit_albedo[thread_idx];
+    auto normal   = path.hit_normal[thread_idx];
+    auto ray      = path.rays[thread_idx];
 
     if (!isfinite(radiance)) radiance = {0, 0, 0};
     if (max(radiance) > params.clamp)
       radiance = radiance * (params.clamp / max(radiance));
-    auto weight = 1.0f / (sample + 1);
+
     if (hit) {
-      state.image[idx] = lerp(
-          state.image[idx], {radiance.x, radiance.y, radiance.z, 1}, weight);
-      state.albedo[idx] = lerp(state.albedo[idx], albedo, weight);
-      state.normal[idx] = lerp(state.normal[idx], normal, weight);
+      state.sample_queue[sample_idx].radiance = {
+          radiance.x, radiance.y, radiance.z, 1};
+      state.sample_queue[sample_idx].albedo = albedo;
+      state.sample_queue[sample_idx].normal = normal;
     } else if (!params.envhidden && !scene.environments.empty()) {
-      state.image[idx] = lerp(
-          state.image[idx], {radiance.x, radiance.y, radiance.z, 1}, weight);
-      state.albedo[idx] = lerp(state.albedo[idx], {1, 1, 1}, weight);
-      state.normal[idx] = lerp(state.normal[idx], -ray.d, weight);
+      state.sample_queue[sample_idx].radiance = {
+          radiance.x, radiance.y, radiance.z, 1};
+      state.sample_queue[sample_idx].albedo = {1, 1, 1};
+      state.sample_queue[sample_idx].normal = -ray.d;
     } else {
-      state.image[idx]  = lerp(state.image[idx], {0, 0, 0, 0}, weight);
-      state.albedo[idx] = lerp(state.albedo[idx], {0, 0, 0}, weight);
-      state.normal[idx] = lerp(state.normal[idx], -ray.d, weight);
+      state.sample_queue[sample_idx].radiance = {0, 0, 0, 0};
+      state.sample_queue[sample_idx].albedo   = {0, 0, 0};
+      state.sample_queue[sample_idx].normal   = -ray.d;
     }
 
-    sample++;
-    state.pixel_samples[idx] = sample;
+    atomicAdd(num_samples_done, 1);
 
-    raygen(state, scene, i, j, params);
-  }
-
-  if (sample >= state.samples + params.batch) {
-    atomicAdd(num_pixels_done, 1);
+    fetch_sample(state, params, thread_idx, sample_queue_front);
   }
 }
 
 // logic phase of the wavefront algorithm
 // we generate a new ray if its the first invocation, or if the
 // last ray terminated due to a miss/max depth reached/opacity/rr
-extern "C" __global__ void trace_pixel_logic(bool first, int* num_pixels_done) {
+extern "C" __global__ void trace_pixel_logic(
+    int* num_samples_done, int* sample_queue_front) {
   // pixel index
   uint2 ij;
   ij.x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1725,18 +1753,8 @@ extern "C" __global__ void trace_pixel_logic(bool first, int* num_pixels_done) {
     return;
   }
 
-  auto idx    = ij.y * globals.state.width + ij.x;
-  auto sample = globals.state.pixel_samples[idx];
-
-  // initialize state on first sample
-  if (first && globals.state.samples == 0) {
-    globals.state.image[idx] = {0, 0, 0, 0};
-    globals.state.rngs[idx]  = make_rng(98273987, idx * 2 + 1);
-    raygen(globals.state, globals.scene, ij.x, ij.y, globals.params);
-  } else {
-    trace_sample(globals.state, globals.scene, globals.bvh, globals.lights,
-        ij.x, ij.y, globals.params, num_pixels_done);
-  }
+  trace_sample(globals.state, globals.scene, globals.bvh, globals.lights, ij.x,
+      ij.y, globals.params, num_samples_done, sample_queue_front);
 }
 
 // extend phase of the wavefront algorithm
@@ -1753,14 +1771,14 @@ extern "C" __global__ void trace_pixel_extend() {
   }
 
   auto idx = ij.y * globals.state.width + ij.x;
-  // auto sample = globals.state.pixel_samples[idx];
 
-  // if (sample >= globals.state.samples + globals.params.batch) {
-  //   return;
-  // }
+  auto sample_idx = globals.state.path.indices[idx];
+  if (sample_idx < 0) {
+    return;
+  }
 
   auto ray          = globals.state.path.rays[idx];
-  auto intersection = intersect_scene(globals.bvh, globals.scene, ray);
+  auto intersection = intersect_scene(globals.bvh, globals.scene, ray, false);
 
   auto& intersections         = globals.state.intersection;
   intersections.instance[idx] = intersection.instance;
@@ -1768,6 +1786,88 @@ extern "C" __global__ void trace_pixel_extend() {
   intersections.uv[idx]       = intersection.uv;
   intersections.distance[idx] = intersection.distance;
   intersections.hit[idx]      = intersection.hit;
+}
+
+// fill in the sample queue by generating #batch rays for each pixel
+extern "C" __global__ void trace_pixel_raygen() {
+  // pixel index
+  uint2 ij;
+  ij.x = blockIdx.x * blockDim.x + threadIdx.x;
+  ij.y = blockIdx.y * blockDim.y + threadIdx.y;
+
+  int width  = globals.state.width;
+  int height = globals.state.height;
+
+  if (ij.x >= width || ij.y >= height) {
+    return;
+  }
+
+  auto idx = ij.y * globals.state.width + ij.x;
+
+  if (globals.state.samples == 0) {
+    globals.state.image[idx] = {0, 0, 0, 0};
+    globals.state.rngs[idx]  = make_rng(98273987, idx * 2 + 1);
+  }
+
+  auto  camera = globals.scene.cameras[globals.params.camera];
+  auto& rng    = globals.state.rngs[idx];
+
+  int stride = width * height;
+  for (int i = 0; i < globals.params.batch; ++i) {
+    auto ray = sample_camera(camera, {(int)ij.x, (int)ij.y}, {width, height},
+        rand2f(rng), rand2f(rng), globals.params.tentfilter);
+
+    globals.state.sample_queue[idx + i * stride].ray = ray;
+    globals.state.sample_queue[idx + i * stride].idx = idx;
+  }
+
+  // fetch the first sample
+  auto& path = globals.state.path;
+
+  path.indices[idx]       = idx;
+  path.radiance[idx]      = vec3f{0, 0, 0};
+  path.weights[idx]       = vec3f{1, 1, 1};
+  path.rays[idx]          = globals.state.sample_queue[idx].ray;
+  path.volume_back[idx]   = {};
+  path.volume_empty[idx]  = true;
+  path.max_roughness[idx] = 0.0f;
+  path.hit[idx]           = false;
+  path.hit_albedo[idx]    = vec3f{0, 0, 0};
+  path.hit_normal[idx]    = vec3f{0, 0, 0};
+  path.opbounces[idx]     = 0;
+  path.bounces[idx]       = 0;
+}
+
+// accumulate the radiance of each sample
+extern "C" __global__ void trace_pixel_acc() {
+  // pixel index
+  uint2 ij;
+  ij.x = blockIdx.x * blockDim.x + threadIdx.x;
+  ij.y = blockIdx.y * blockDim.y + threadIdx.y;
+
+  int width  = globals.state.width;
+  int height = globals.state.height;
+
+  if (ij.x >= width || ij.y >= height) {
+    return;
+  }
+
+  auto sample = globals.state.samples;
+  int  idx    = ij.y * globals.state.width + ij.x;
+
+  int stride = width * height;
+  for (int i = 0; i < globals.params.batch; ++i) {
+    globals.state.image[idx]  = lerp(globals.state.image[idx],
+         globals.state.sample_queue[idx + i * stride].radiance,
+         1.0f / (sample + 1));
+    globals.state.albedo[idx] = lerp(globals.state.albedo[idx],
+        globals.state.sample_queue[idx + i * stride].albedo,
+        1.0f / (sample + 1));
+    globals.state.normal[idx] = lerp(globals.state.normal[idx],
+        globals.state.sample_queue[idx + i * stride].normal,
+        1.0f / (sample + 1));
+    sample++;
+  }
 }
 
 // dispatch trace_pixel for each pixel
@@ -1788,36 +1888,51 @@ extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
         cudaGetErrorName(cpyResult));
   }
 
-  int* num_pixels_done;
-  cudaMalloc(&num_pixels_done, sizeof(int));
-  int num_pixels_done_cpu = 0;
+  int* num_samples_done;
+  int* sample_queue_front;
+  cudaMalloc(&num_samples_done, sizeof(int));
+  cudaMalloc(&sample_queue_front, sizeof(int));
+  cudaMemset(num_samples_done, 0, sizeof(int));
+  int num_samples_done_cpu = 0;
 
   int width  = globals_cpu.state.width;
   int height = globals_cpu.state.height;
 
   dim3 blockSize = {16, 16, 1};
   dim3 gridSize  = {(width + blockSize.x - 1) / blockSize.x,
-      (height + blockSize.y - 1) / blockSize.y, 1};
+       (height + blockSize.y - 1) / blockSize.y, 1};
 
-  int  cur   = 0;
-  bool first = true;
-  while (num_pixels_done_cpu < width * height) {
-    cudaMemset(num_pixels_done, 0, sizeof(int));
+  trace_pixel_raygen<<<gridSize, blockSize>>>();  // generate rays
 
-    trace_pixel_logic<<<gridSize, blockSize>>>(first, num_pixels_done);
-    first = false;
+  int init_queue_front = width * height;
+  cudaMemcpy(sample_queue_front, &init_queue_front, sizeof(int),
+      cudaMemcpyHostToDevice);
 
-    trace_pixel_extend<<<gridSize, blockSize>>>();
+  int cur            = 0;
+  int target_samples = width * height * globals_cpu.params.batch;
 
-    cudaMemcpy(&num_pixels_done_cpu, num_pixels_done, sizeof(int),
-        cudaMemcpyDeviceToHost);
-
-    // printf("iteration %d, num pixels done: %d/%d\n", cur++,
-    // num_pixels_done_cpu,
-    //     width * height);
+  if ((long)width * height * globals_cpu.params.batch != target_samples) {
+    throw std::runtime_error("too many samples, sample queue overflow");
   }
 
-  cudaFree(num_pixels_done);
+  while (num_samples_done_cpu < target_samples) {
+    trace_pixel_extend<<<gridSize, blockSize>>>();
+
+    trace_pixel_logic<<<gridSize, blockSize>>>(
+        num_samples_done, sample_queue_front);
+
+    cudaMemcpy(&num_samples_done_cpu, num_samples_done, sizeof(int),
+        cudaMemcpyDeviceToHost);
+
+    // printf("iteration %d, num samples done: %d/%d, %f\n", cur++,
+    //     num_samples_done_cpu, target_samples,
+    //     (float)num_samples_done_cpu / target_samples);
+  }
+
+  trace_pixel_acc<<<gridSize, blockSize>>>();
+
+  cudaFree(num_samples_done);
+  cudaFree(sample_queue_front);
 }
 
 }  // namespace yocto

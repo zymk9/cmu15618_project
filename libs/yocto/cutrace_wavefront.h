@@ -297,6 +297,7 @@ struct cuscene_bvh {
 
 // path states
 struct cutrace_path {
+  cuspan<int>            indices       = {};
   cuspan<vec3f>          radiance      = {};
   cuspan<vec3f>          weights       = {};
   cuspan<ray3f>          rays          = {};
@@ -329,6 +330,14 @@ struct cutrace_intersection {
   ~cutrace_intersection();
 };
 
+struct cutrace_sample {
+  ray3f ray      = {};
+  vec4f radiance = {};
+  vec3f albedo   = {};
+  vec3f normal   = {};
+  int   idx      = 0;
+};
+
 // state
 struct cutrace_state {
   int               width            = 0;
@@ -342,6 +351,8 @@ struct cutrace_state {
   cuspan<vec4f>     denoised         = {};
   cuspan<byte>      denoiser_state   = {};
   cuspan<byte>      denoiser_scratch = {};
+
+  cuspan<cutrace_sample> sample_queue = {};
 
   cutrace_path         path         = {};
   cutrace_intersection intersection = {};

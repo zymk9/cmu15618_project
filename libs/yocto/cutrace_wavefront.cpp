@@ -263,6 +263,8 @@ cutrace_state::cutrace_state(cutrace_state&& other) {
   denoiser_state.swap(other.denoiser_state);
   denoiser_scratch.swap(other.denoiser_scratch);
 
+  sample_queue.swap(other.sample_queue);
+
   path         = std::move(other.path);
   intersection = std::move(other.intersection);
 }
@@ -279,6 +281,8 @@ cutrace_state& cutrace_state::operator=(cutrace_state&& other) {
   denoiser_state.swap(other.denoiser_state);
   denoiser_scratch.swap(other.denoiser_scratch);
 
+  sample_queue.swap(other.sample_queue);
+
   path         = std::move(other.path);
   intersection = std::move(other.intersection);
   return *this;
@@ -292,9 +296,11 @@ cutrace_state::~cutrace_state() {
   clear_buffer(denoised);
   clear_buffer(denoiser_state);
   clear_buffer(denoiser_scratch);
+  clear_buffer(sample_queue);
 }
 
 cutrace_path::cutrace_path(cutrace_path&& other) {
+  indices.swap(other.indices);
   radiance.swap(other.radiance);
   weights.swap(other.weights);
   rays.swap(other.rays);
@@ -308,6 +314,7 @@ cutrace_path::cutrace_path(cutrace_path&& other) {
   bounces.swap(other.bounces);
 }
 cutrace_path& cutrace_path::operator=(cutrace_path&& other) {
+  indices.swap(other.indices);
   radiance.swap(other.radiance);
   weights.swap(other.weights);
   rays.swap(other.rays);
@@ -322,6 +329,7 @@ cutrace_path& cutrace_path::operator=(cutrace_path&& other) {
   return *this;
 }
 cutrace_path::~cutrace_path() {
+  clear_buffer(indices);
   clear_buffer(radiance);
   clear_buffer(weights);
   clear_buffer(rays);
@@ -675,6 +683,9 @@ cutrace_state make_cutrace_state(cutrace_context& context,
   state.rngs = make_buffer(
       context.cuda_stream, state.width * state.height, (rng_state*)nullptr);
 
+  state.sample_queue = make_buffer(context.cuda_stream,
+      state.width * state.height * params.batch, (cutrace_sample*)nullptr);
+
   state.path         = make_cutrace_path(context, state.width, state.height);
   state.intersection = make_cutrace_intersection(
       context, state.width, state.height);
@@ -718,6 +729,9 @@ void reset_cutrace_state(cutrace_context& context, cutrace_state& state,
   resize_buffer(context.cuda_stream, state.rngs, state.width * state.height,
       (rng_state*)nullptr);
 
+  resize_buffer(context.cuda_stream, state.sample_queue,
+      state.width * state.height * params.batch, (cutrace_sample*)nullptr);
+
   state.path         = make_cutrace_path(context, state.width, state.height);
   state.intersection = make_cutrace_intersection(
       context, state.width, state.height);
@@ -746,6 +760,7 @@ cutrace_path make_cutrace_path(
   auto path       = cutrace_path{};
   auto num_pixels = width * height;
 
+  path.indices  = make_buffer(context.cuda_stream, num_pixels, (int*)nullptr);
   path.radiance = make_buffer(context.cuda_stream, num_pixels, (vec3f*)nullptr);
   path.weights  = make_buffer(context.cuda_stream, num_pixels, (vec3f*)nullptr);
   path.rays     = make_buffer(context.cuda_stream, num_pixels, (ray3f*)nullptr);

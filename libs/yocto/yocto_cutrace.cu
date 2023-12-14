@@ -352,6 +352,7 @@ struct trace_params {
   int                   pratio         = 8;
   bool                  denoise        = false;
   int                   batch          = 1;
+  bool                  wbvh           = false;
 };
 
 using cutrace_bvh = OptixTraversableHandle;
