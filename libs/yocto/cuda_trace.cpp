@@ -558,6 +558,29 @@ cubvh_tree make_cubvh_tree(cutrace_context& context, const bvh_tree& bvh_cpu) {
   return bvh;
 }
 
+cutrace_bvh make_cutrace_wbvh(cutrace_context& context, const scene_data& scene,
+    const trace_params& params, const scene_bvh& bvh_cpu) {
+  auto bvh = cutrace_bvh{};
+
+  auto wbvh_cpu = convert_bvh_to_wbvh(scene, bvh_cpu);
+
+  bvh.bvh = make_cubvh_tree(context, wbvh_cpu.bvh);
+  context.shape_bvhs.resize(wbvh_cpu.shapes.size());
+
+  for (size_t i = 0; i < wbvh_cpu.shapes.size(); i++) {
+    context.shape_bvhs[i].bvh = make_cubvh_tree(
+        context, wbvh_cpu.shapes[i].bvh);
+  }
+
+  bvh.shapes = make_buffer(context.cuda_stream, context.shape_bvhs);
+
+  // sync gpu
+  sync_gpu(context.cuda_stream);
+
+  // done
+  return bvh;
+}
+
 cutrace_bvh make_cutrace_bvh(cutrace_context& context,
     const cuscene_data& scene, const trace_params& params,
     const scene_bvh& bvh_cpu) {
@@ -577,6 +600,180 @@ cutrace_bvh make_cutrace_bvh(cutrace_context& context,
 
   // done
   return bvh;
+}
+
+void get_bvh_primitive_range(
+    const bvh_tree& bvh_cpu, int idx, vector<pair<int, int>>& primitive_range) {
+  auto& node = bvh_cpu.nodes[idx];
+
+  if (node.internal) {
+    get_bvh_primitive_range(bvh_cpu, node.start + 0, primitive_range);
+    get_bvh_primitive_range(bvh_cpu, node.start + 1, primitive_range);
+
+    primitive_range[idx] = {primitive_range[node.start + 0].first,
+        primitive_range[node.start + 1].second};
+  } else {
+    primitive_range[idx] = {node.start, node.start + node.num};
+  }
+}
+
+void calculate_cost(const bvh_tree& bvh_cpu, int idx, vector<double>& bvh_cost,
+    vector<partition_stragegy>&   bvh_strategy,
+    const vector<pair<int, int>>& primitive_range) {
+  auto& node = bvh_cpu.nodes[idx];
+
+  const double c_node         = 1.0;
+  const double c_prim         = 0.3;
+  const int    wbvh_max_prims = 3;
+
+  auto bbox_area = [](const bbox3f& b) {
+    auto size = b.max - b.min;
+    return 1e-12f + 2 * size.x * size.y + 2 * size.x * size.z +
+           2 * size.y * size.z;
+  };
+
+  double A_n = bbox_area(bvh_cpu.nodes[idx].bbox) /
+               bbox_area(bvh_cpu.nodes[0].bbox);
+
+  // leaf node
+  int num_primitives = primitive_range[idx].second - primitive_range[idx].first;
+  if (num_primitives <= wbvh_max_prims) {
+    bvh_strategy[idx].record[1].optimal_cost   = A_n * num_primitives * c_prim;
+    bvh_strategy[idx].record[1].left_root_num  = 0;
+    bvh_strategy[idx].record[1].right_root_num = 0;
+  }
+
+  if (node.internal) {
+    calculate_cost(
+        bvh_cpu, node.start + 0, bvh_cost, bvh_strategy, primitive_range);
+    calculate_cost(
+        bvh_cpu, node.start + 1, bvh_cost, bvh_strategy, primitive_range);
+
+    // split node
+    for (int root_num = 2; root_num <= 8; root_num++) {
+      for (int left_root_num = 1; left_root_num <= root_num - 1;
+           left_root_num++) {
+        int    right_root_num = root_num - left_root_num;
+        double left_cost =
+            bvh_strategy[node.start + 0].record[left_root_num].optimal_cost;
+        double right_cost =
+            bvh_strategy[node.start + 1].record[right_root_num].optimal_cost;
+
+        if (left_cost < 0 || right_cost < 0) {
+          continue;
+        }
+
+        if (bvh_strategy[idx].record[root_num].optimal_cost < 0 ||
+            left_cost + right_cost <
+                bvh_strategy[idx].record[root_num].optimal_cost) {
+          bvh_strategy[idx].record[root_num].optimal_cost = left_cost +
+                                                            right_cost;
+          bvh_strategy[idx].record[root_num].left_root_num  = left_root_num;
+          bvh_strategy[idx].record[root_num].right_root_num = right_root_num;
+        }
+      }
+    }
+
+    // internel node
+    for (int root_num = 2; root_num <= 8; root_num++) {
+      if (bvh_strategy[idx].record[1].optimal_cost < 0 ||
+          bvh_strategy[idx].record[root_num].optimal_cost <
+              bvh_strategy[idx].record[1].optimal_cost - A_n * c_node) {
+        if (bvh_strategy[idx].record[root_num].optimal_cost < 0) {
+          continue;
+        }
+
+        bvh_strategy[idx].record[1].optimal_cost =
+            bvh_strategy[idx].record[root_num].optimal_cost + A_n * c_node;
+        bvh_strategy[idx].record[1].left_root_num =
+            bvh_strategy[idx].record[root_num].left_root_num;
+        bvh_strategy[idx].record[1].right_root_num =
+            bvh_strategy[idx].record[root_num].right_root_num;
+      }
+    }
+  }
+};
+
+void reconstruct_bvh(const bvh_tree& bvh_cpu, bvh_tree& wbvh_cpu,
+    const vector<partition_stragegy>& bvh_strategy,
+    const vector<pair<int, int>>& primitive_range, int idx, int pos,
+    int root_num) {
+  if (root_num == 1) {
+    // leaf node
+    if (bvh_strategy[idx].record[root_num].left_root_num == 0) {
+      auto& node = wbvh_cpu.nodes[pos];
+      node.bbox     = bvh_cpu.nodes[idx].bbox;
+      node.start    = primitive_range[idx].first;
+      node.num      = primitive_range[idx].second - primitive_range[idx].first;
+      node.axis     = bvh_cpu.nodes[idx].axis;
+      node.internal = false;
+    }
+    // internal node
+    else {
+      int next_root_num = bvh_strategy[idx].record[root_num].left_root_num +
+                          bvh_strategy[idx].record[root_num].right_root_num;
+      int next_pos = wbvh_cpu.nodes.size();
+      for (int i = 0; i < next_root_num; i++) {
+        wbvh_cpu.nodes.emplace_back();
+      }
+
+      reconstruct_bvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range,
+          bvh_cpu.nodes[idx].start + 0, next_pos,
+          bvh_strategy[idx].record[root_num].left_root_num);
+      reconstruct_bvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range,
+          bvh_cpu.nodes[idx].start + 1,
+          next_pos + bvh_strategy[idx].record[root_num].left_root_num,
+          bvh_strategy[idx].record[root_num].right_root_num);
+
+      auto& node = wbvh_cpu.nodes[pos];
+      node.bbox     = bvh_cpu.nodes[idx].bbox;
+      node.start    = next_pos;
+      node.num      = next_root_num;
+      node.axis     = bvh_cpu.nodes[idx].axis;
+      node.internal = true;
+    }
+  } else {
+    reconstruct_bvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range,
+        bvh_cpu.nodes[idx].start + 0, pos,
+        bvh_strategy[idx].record[root_num].left_root_num);
+    reconstruct_bvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range,
+        bvh_cpu.nodes[idx].start + 1,
+        pos + bvh_strategy[idx].record[root_num].left_root_num,
+        bvh_strategy[idx].record[root_num].right_root_num);
+  }
+}
+
+bvh_tree convert_bvh_to_wbvh(const bvh_tree& bvh_cpu) {
+  vector<pair<int, int>> primitive_range(bvh_cpu.nodes.size());
+
+  get_bvh_primitive_range(bvh_cpu, 0, primitive_range);
+
+  vector<double>             bvh_cost(bvh_cpu.nodes.size());
+  vector<partition_stragegy> bvh_strategy(bvh_cpu.nodes.size());
+
+  calculate_cost(bvh_cpu, 0, bvh_cost, bvh_strategy, primitive_range);
+
+  auto wbvh_cpu = bvh_tree{};
+  wbvh_cpu.nodes.emplace_back();
+  wbvh_cpu.primitives = bvh_cpu.primitives;
+
+  reconstruct_bvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range, 0, 0, 1);
+
+  return wbvh_cpu;
+}
+
+scene_bvh convert_bvh_to_wbvh(
+    const scene_data& scene, const scene_bvh& bvh_cpu) {
+  auto wbvh = scene_bvh{};
+
+  wbvh.shapes.resize(scene.shapes.size());
+  for (auto idx : range(scene.shapes.size())) {
+    wbvh.shapes[idx] = shape_bvh{convert_bvh_to_wbvh(bvh_cpu.shapes[idx].bvh)};
+  }
+
+  wbvh.bvh = convert_bvh_to_wbvh(bvh_cpu.bvh);
+
+  return wbvh;
 }
 
 // Initialize state.

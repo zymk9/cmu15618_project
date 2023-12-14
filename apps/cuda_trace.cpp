@@ -81,6 +81,7 @@ void run(const vector<string>& args) {
   add_option(cli, "noparallel", params.noparallel, "disable threading");
   add_option(cli, "dumpparams", dumpname, "dump params filename");
   add_option(cli, "edit", edit, "edit interactively");
+  add_option(cli, "wbvh", params.wbvh, "use wide bvh");
   parse_cli(cli, args);
 
   // load config
@@ -143,8 +144,13 @@ void run(const vector<string>& args) {
   print_info("build cpu bvh: {}", elapsed_formatted(timer));
 
   // build gpu bvh
-  timer    = simple_timer{};
-  auto bvh = make_cutrace_bvh(context, cuscene, params, bvh_cpu.bvh);
+  timer = simple_timer{};
+  cuscene_bvh bvh;
+  if (params.wbvh) {
+    bvh = make_cutrace_wbvh(context, scene, params, bvh_cpu.bvh);
+  } else {
+    bvh = make_cutrace_bvh(context, cuscene, params, bvh_cpu.bvh);
+  }
   print_info("build gpu bvh: {}", elapsed_formatted(timer));
 
   // init lights

@@ -327,6 +327,7 @@ struct trace_params {
   int                   pratio         = 8;
   bool                  denoise        = false;
   int                   batch          = 1;
+  bool                  wbvh           = false;
 };
 
 using cutrace_bvh = cuscene_bvh;
@@ -695,6 +696,61 @@ struct shape_intersection {
   bool  hit      = false;
 };
 
+static shape_intersection intersect_shape_wbvh(
+    const cushape_bvh& sbvh, const shape_data& shape, const ray3f& ray_) {
+  // get bvh tree
+  auto& bvh = sbvh.bvh;
+
+  // check empty
+  if (bvh.nodes.empty()) return {};
+
+  // node stack
+  int  node_stack[128];
+  auto node_cur          = 0;
+  node_stack[node_cur++] = 0;
+
+  // shared variables
+  auto intersection = shape_intersection{};
+
+  // copy ray to modify it
+  auto ray = ray_;
+
+  // prepare ray for fast queries
+  auto ray_dinv  = vec3f{1 / ray.d.x, 1 / ray.d.y, 1 / ray.d.z};
+  auto ray_dsign = vec3i{(ray_dinv.x < 0) ? 1 : 0, (ray_dinv.y < 0) ? 1 : 0,
+      (ray_dinv.z < 0) ? 1 : 0};
+
+  // walking stack
+  while (node_cur != 0) {
+    // grab node
+    auto& node = bvh.nodes[node_stack[--node_cur]];
+
+    // intersect bbox
+    // if (!intersect_bbox(ray, ray_dinv, ray_dsign, node.bbox)) continue;
+    if (!intersect_bbox(ray, ray_dinv, node.bbox)) continue;
+
+    // intersect node, switching based on node type
+    // for each type, iterate over the the primitive list
+    if (node.internal) {
+      for (int idx = node.start; idx < node.start + node.num; idx++) {
+        node_stack[node_cur++] = idx;
+      }
+    } else if (!shape.triangles.empty()) {
+      for (auto idx = node.start; idx < node.start + node.num; idx++) {
+        auto& t             = shape.triangles[bvh.primitives[idx]];
+        auto  pintersection = intersect_triangle(ray, shape.positions[t.x],
+             shape.positions[t.y], shape.positions[t.z]);
+        if (!pintersection.hit) continue;
+        intersection = {bvh.primitives[idx], pintersection.uv,
+            pintersection.distance, true};
+        ray.tmax     = pintersection.distance;
+      }
+    }
+  }
+
+  return intersection;
+}
+
 static shape_intersection intersect_shape_bvh(
     const cushape_bvh& sbvh, const shape_data& shape, const ray3f& ray_) {
   // get bvh tree
@@ -756,7 +812,63 @@ static shape_intersection intersect_shape_bvh(
   return intersection;
 }
 
-static scene_intersection intersect_scene(
+static scene_intersection intersect_scene_wbvh(
+    const cuscene_bvh& sbvh, const scene_data& scene, const ray3f& ray_) {
+  // get instances bvh
+  auto& bvh = sbvh.bvh;
+
+  // check empty
+  if (bvh.nodes.empty()) return {};
+
+  // node stack
+  int  node_stack[128];
+  auto node_cur          = 0;
+  node_stack[node_cur++] = 0;
+
+  // intersection
+  auto intersection = scene_intersection{};
+
+  // copy ray to modify it
+  auto ray = ray_;
+
+  // prepare ray for fast queries
+  auto ray_dinv  = vec3f{1 / ray.d.x, 1 / ray.d.y, 1 / ray.d.z};
+  auto ray_dsign = vec3i{(ray_dinv.x < 0) ? 1 : 0, (ray_dinv.y < 0) ? 1 : 0,
+      (ray_dinv.z < 0) ? 1 : 0};
+
+  // walking stack
+  while (node_cur != 0) {
+    // grab node
+    auto& node = bvh.nodes[node_stack[--node_cur]];
+
+    // intersect bbox
+    // if (!intersect_bbox(ray, ray_dinv, ray_dsign, node.bbox)) continue;
+    if (!intersect_bbox(ray, ray_dinv, node.bbox)) continue;
+
+    // intersect node, switching based on node type
+    // for each type, iterate over the the primitive list
+    if (node.internal) {
+      for (int idx = node.start; idx < node.start + node.num; idx++) {
+        node_stack[node_cur++] = idx;
+      }
+    } else {
+      for (auto idx = node.start; idx < node.start + node.num; idx++) {
+        auto& instance_ = scene.instances[bvh.primitives[idx]];
+        auto  inv_ray   = transform_ray(inverse(instance_.frame, true), ray);
+        auto  sintersection = intersect_shape_wbvh(sbvh.shapes[instance_.shape],
+             scene.shapes[instance_.shape], inv_ray);
+        if (!sintersection.hit) continue;
+        intersection = {bvh.primitives[idx], sintersection.element,
+            sintersection.uv, sintersection.distance, true};
+        ray.tmax     = sintersection.distance;
+      }
+    }
+  }
+
+  return intersection;
+}
+
+static scene_intersection intersect_scene_bvh(
     const cuscene_bvh& sbvh, const scene_data& scene, const ray3f& ray_) {
   // get instances bvh
   auto& bvh = sbvh.bvh;
@@ -816,6 +928,16 @@ static scene_intersection intersect_scene(
   }
 
   return intersection;
+}
+
+static scene_intersection intersect_scene(
+    const cuscene_bvh& sbvh, const scene_data& scene, const ray3f& ray_) {
+  if (globals.params.wbvh) {
+    return intersect_scene_wbvh(sbvh, scene, ray_);
+  }
+  else {
+    return intersect_scene_bvh(sbvh, scene, ray_);
+  }
 }
 
 // instance intersection, for now manual
