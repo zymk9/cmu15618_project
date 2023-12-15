@@ -77,8 +77,8 @@ cuscene_bvh make_cutrace_bvh(cutrace_context& context,
 struct partition_stragegy {
   struct {
     double optimal_cost   = -1;
-    int left_root_num  = -1;
-    int right_root_num = -1;
+    int    left_root_num  = -1;
+    int    right_root_num = -1;
   } record[9];
 };
 
@@ -88,6 +88,16 @@ void get_bvh_primitive_range(
 void calculate_cost(const bvh_tree& bvh_cpu, int idx, vector<double>& bvh_cost,
     vector<partition_stragegy>&   bvh_strategy,
     const vector<pair<int, int>>& primitive_range);
+
+void reconstruct_wbvh(const bvh_tree& bvh_cpu, bvh_tree& wbvh_cpu,
+    const vector<partition_stragegy>& bvh_strategy,
+    const vector<pair<int, int>>& primitive_range, int idx, int pos,
+    int root_num);
+
+void slot_auction(
+    const vector<vector<double>>& traversal_cost, bvh_tree& wbvh_cpu, int idx);
+
+void reorder_wbvh(bvh_tree& wbvh_cpu, int idx);
 
 bvh_tree  convert_bvh_to_wbvh(const bvh_tree& bvh_cpu);
 scene_bvh convert_bvh_to_wbvh(

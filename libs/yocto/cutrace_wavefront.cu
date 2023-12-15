@@ -319,11 +319,13 @@ struct cuscene_data {
 };
 
 struct bvh_node {
-  bbox3f  bbox     = invalidb3f;
-  int32_t start    = 0;
-  int16_t num      = 0;
-  int8_t  axis     = 0;
-  bool    internal = false;
+  bbox3f  bbox        = invalidb3f;
+  int32_t start       = 0;
+  int16_t num         = 0;
+  int8_t  axis        = 0;
+  bool    internal    = false;
+  int8_t  slot_map[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  int8_t  slot_pos    = 0;
 };
 
 struct cubvh_tree {
@@ -795,7 +797,7 @@ static shape_intersection intersect_shape_wbvh(const cushape_bvh& sbvh,
       for (auto idx = node.start; idx < node.start + node.num; idx++) {
         auto& t             = shape.triangles[bvh.primitives[idx]];
         auto  pintersection = intersect_triangle(ray, shape.positions[t.x],
-             shape.positions[t.y], shape.positions[t.z]);
+            shape.positions[t.y], shape.positions[t.z]);
         if (!pintersection.hit) continue;
         intersection = {bvh.primitives[idx], pintersection.uv,
             pintersection.distance, true};
@@ -859,7 +861,7 @@ static shape_intersection intersect_shape_bvh(const cushape_bvh& sbvh,
       for (auto idx = node.start; idx < node.start + node.num; idx++) {
         auto& t             = shape.triangles[bvh.primitives[idx]];
         auto  pintersection = intersect_triangle(ray, shape.positions[t.x],
-             shape.positions[t.y], shape.positions[t.z]);
+            shape.positions[t.y], shape.positions[t.z]);
         if (!pintersection.hit) continue;
         intersection = {bvh.primitives[idx], pintersection.uv,
             pintersection.distance, true};
@@ -918,7 +920,7 @@ static scene_intersection intersect_scene_wbvh(const cuscene_bvh& sbvh,
         auto& instance_ = scene.instances[bvh.primitives[idx]];
         auto  inv_ray   = transform_ray(inverse(instance_.frame, true), ray);
         auto  sintersection = intersect_shape_wbvh(sbvh.shapes[instance_.shape],
-             scene.shapes[instance_.shape], inv_ray, find_any);
+            scene.shapes[instance_.shape], inv_ray, find_any);
         if (!sintersection.hit) continue;
         intersection = {bvh.primitives[idx], sintersection.element,
             sintersection.uv, sintersection.distance, true};
@@ -983,7 +985,7 @@ static scene_intersection intersect_scene_bvh(const cuscene_bvh& sbvh,
         auto& instance_ = scene.instances[bvh.primitives[idx]];
         auto  inv_ray   = transform_ray(inverse(instance_.frame, true), ray);
         auto  sintersection = intersect_shape_bvh(sbvh.shapes[instance_.shape],
-             scene.shapes[instance_.shape], inv_ray, find_any);
+            scene.shapes[instance_.shape], inv_ray, find_any);
         if (!sintersection.hit) continue;
         intersection = {bvh.primitives[idx], sintersection.element,
             sintersection.uv, sintersection.distance, true};
@@ -1018,7 +1020,7 @@ static scene_intersection intersect_instance(const trace_bvh& bvh,
   for (auto element = 0; element < shape.triangles.size(); element++) {
     auto& triangle = shape.triangles[element];
     auto  isec     = intersect_triangle(tray, shape.positions[triangle.x],
-             shape.positions[triangle.y], shape.positions[triangle.z]);
+        shape.positions[triangle.y], shape.positions[triangle.z]);
     if (!isec.hit) continue;
     intersection.hit      = true;
     intersection.instance = instance_id;
@@ -1348,7 +1350,7 @@ static float sample_lights_pdf(const scene_data& scene, const trace_bvh& bvh,
         auto i = clamp(
             (int)(texcoord.x * emission_tex.width), 0, emission_tex.width - 1);
         auto j    = clamp((int)(texcoord.y * emission_tex.height), 0,
-               emission_tex.height - 1);
+            emission_tex.height - 1);
         auto prob = sample_discrete_pdf(
                         light.elements_cdf, j * emission_tex.width + i) /
                     light.elements_cdf.back();
@@ -2471,7 +2473,7 @@ extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
 
   dim3 blockSize = {16, 16, 1};
   dim3 gridSize  = {(width + blockSize.x - 1) / blockSize.x,
-       (height + blockSize.y - 1) / blockSize.y, 1};
+      (height + blockSize.y - 1) / blockSize.y, 1};
 
   trace_pixel_raygen<<<gridSize, blockSize>>>(
       sample_queue_front);  // generate rays

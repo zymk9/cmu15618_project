@@ -4,6 +4,11 @@
 
 #include "cuda_trace.h"
 
+#include <float.h>
+
+#include "yocto/yocto_math.h"
+#include "yocto/yocto_shape.h"
+
 #if defined(YOCTO_CUDA) && defined(CUSTOM_CUDA) && !defined(WAVEFRONT)
 
 #include "yocto_sampling.h"
@@ -694,14 +699,14 @@ void calculate_cost(const bvh_tree& bvh_cpu, int idx, vector<double>& bvh_cost,
   }
 };
 
-void reconstruct_bvh(const bvh_tree& bvh_cpu, bvh_tree& wbvh_cpu,
+void reconstruct_wbvh(const bvh_tree& bvh_cpu, bvh_tree& wbvh_cpu,
     const vector<partition_stragegy>& bvh_strategy,
     const vector<pair<int, int>>& primitive_range, int idx, int pos,
     int root_num) {
   if (root_num == 1) {
     // leaf node
     if (bvh_strategy[idx].record[root_num].left_root_num == 0) {
-      auto& node = wbvh_cpu.nodes[pos];
+      auto& node    = wbvh_cpu.nodes[pos];
       node.bbox     = bvh_cpu.nodes[idx].bbox;
       node.start    = primitive_range[idx].first;
       node.num      = primitive_range[idx].second - primitive_range[idx].first;
@@ -717,15 +722,15 @@ void reconstruct_bvh(const bvh_tree& bvh_cpu, bvh_tree& wbvh_cpu,
         wbvh_cpu.nodes.emplace_back();
       }
 
-      reconstruct_bvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range,
+      reconstruct_wbvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range,
           bvh_cpu.nodes[idx].start + 0, next_pos,
           bvh_strategy[idx].record[root_num].left_root_num);
-      reconstruct_bvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range,
+      reconstruct_wbvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range,
           bvh_cpu.nodes[idx].start + 1,
           next_pos + bvh_strategy[idx].record[root_num].left_root_num,
           bvh_strategy[idx].record[root_num].right_root_num);
 
-      auto& node = wbvh_cpu.nodes[pos];
+      auto& node    = wbvh_cpu.nodes[pos];
       node.bbox     = bvh_cpu.nodes[idx].bbox;
       node.start    = next_pos;
       node.num      = next_root_num;
@@ -733,13 +738,81 @@ void reconstruct_bvh(const bvh_tree& bvh_cpu, bvh_tree& wbvh_cpu,
       node.internal = true;
     }
   } else {
-    reconstruct_bvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range,
+    reconstruct_wbvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range,
         bvh_cpu.nodes[idx].start + 0, pos,
         bvh_strategy[idx].record[root_num].left_root_num);
-    reconstruct_bvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range,
+    reconstruct_wbvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range,
         bvh_cpu.nodes[idx].start + 1,
         pos + bvh_strategy[idx].record[root_num].left_root_num,
         bvh_strategy[idx].record[root_num].right_root_num);
+  }
+}
+
+void slot_auction(
+    const vector<vector<double>>& traversal_cost, bvh_tree& wbvh_cpu, int idx) {
+  auto& node = wbvh_cpu.nodes[idx];
+
+  vector<int> assignment(8, -1);
+
+  for (int i = 0; i < node.num; i++) {
+    double minCost = DBL_MAX;
+    int    minSlot = -1;
+
+    for (int j = 0; j < 8; j++) {
+      if (assignment[j] == -1 && traversal_cost[i][j] < minCost) {
+        minCost = traversal_cost[i][j];
+        minSlot = j;
+      }
+    }
+
+    wbvh_cpu.nodes[node.start + i].slot_pos = minSlot;
+    assignment[minSlot]                     = i;
+  }
+
+  auto cmp = [](bvh_node& a, bvh_node& b) -> bool {
+    return a.slot_pos < b.slot_pos;
+  };
+
+  std::sort(wbvh_cpu.nodes.begin() + node.start,
+      wbvh_cpu.nodes.begin() + node.start + node.num, cmp);
+
+  int cur_index = 0;
+  for (int i = 0; i < 8; i++) {
+    node.slot_map[i] = cur_index;
+    if (assignment[i] != -1) {
+      cur_index = (cur_index + 1) % traversal_cost.size();
+    }
+  }
+}
+
+void reorder_wbvh(bvh_tree& wbvh_cpu, int idx) {
+  auto& node = wbvh_cpu.nodes[idx];
+
+  // leaf node
+  if (!node.internal) {
+    return;
+  }
+
+  // internal node
+  vector<vector<double>> traversal_cost(node.num, vector<double>(8));
+  static vector<vec3f>   rays{{1, 1, 1}, {1, 1, -1}, {1, -1, 1}, {1, -1, -1},
+      {-1, 1, 1}, {-1, 1, -1}, {-1, -1, 1}, {-1, -1, -1}};
+
+  auto centroid = (node.bbox.max + node.bbox.min) / 2;
+  for (int i = 0; i < node.num; i++) {
+    auto& child          = wbvh_cpu.nodes[node.start + i];
+    auto  child_centroid = (child.bbox.max + child.bbox.min) / 2;
+    auto  diff           = child_centroid - centroid;
+
+    for (int j = 0; j < 8; j++) {
+      traversal_cost[i][j] = dot(diff, rays[j]);
+    }
+  }
+
+  slot_auction(traversal_cost, wbvh_cpu, idx);
+
+  for (int i = node.start; i < node.start + node.num; i++) {
+    reorder_wbvh(wbvh_cpu, i);
   }
 }
 
@@ -757,7 +830,9 @@ bvh_tree convert_bvh_to_wbvh(const bvh_tree& bvh_cpu) {
   wbvh_cpu.nodes.emplace_back();
   wbvh_cpu.primitives = bvh_cpu.primitives;
 
-  reconstruct_bvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range, 0, 0, 1);
+  reconstruct_wbvh(bvh_cpu, wbvh_cpu, bvh_strategy, primitive_range, 0, 0, 1);
+
+  reorder_wbvh(wbvh_cpu, 0);
 
   return wbvh_cpu;
 }
