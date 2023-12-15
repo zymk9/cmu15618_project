@@ -198,11 +198,8 @@ struct cutrace_intersection {
 };
 
 struct cutrace_sample {
-  ray3f ray      = {};
-  vec4f radiance = {};
-  vec3f albedo   = {};
-  vec3f normal   = {};
-  int   idx      = 0;
+  int idx   = 0;
+  int iters = 0;
 };
 
 struct cutrace_state {
@@ -1672,12 +1669,23 @@ static void fetch_sample(cutrace_state& state, const trace_params& params,
     return;
   }
 
+  int pixel_idx = sample_idx / params.batch;
+  int pixel_x   = pixel_idx % state.width;
+  int pixel_y   = pixel_idx / state.width;
+
+  auto& camera = globals.scene.cameras[globals.params.camera];
+  auto& rng    = globals.state.rngs[idx];
+
+  auto ray = sample_camera(camera, {pixel_x, pixel_y},
+      {state.width, state.height}, rand2f(rng), rand2f(rng),
+      globals.params.tentfilter);
+
   auto& path = state.path;
 
-  path.indices[idx]       = state.sample_queue[sample_idx].idx;
+  path.indices[idx]       = pixel_idx;
   path.radiance[idx]      = vec3f{0, 0, 0};
   path.weights[idx]       = vec3f{1, 1, 1};
-  path.rays[idx]          = state.sample_queue[sample_idx].ray;
+  path.rays[idx]          = ray;
   path.volume_back[idx]   = {};
   path.volume_empty[idx]  = true;
   path.max_roughness[idx] = 0.0f;
@@ -1693,15 +1701,13 @@ static void trace_sample(cutrace_state& state, const cuscene_data& scene,
     const trace_params& params, int* num_samples_done,
     int* sample_queue_front) {
   auto thread_idx = state.width * j + i;
-  auto sample_idx = state.path.indices[thread_idx];
-  if (sample_idx < 0) {
+  auto pixel_idx  = state.path.indices[thread_idx];
+  if (pixel_idx < 0) {
     return;
   }
 
-  auto pixel_idx = state.sample_queue[sample_idx].idx;
-
   auto result = eval_ray(scene, bvh, lights, state.path, state.intersection,
-      thread_idx, state.rngs[pixel_idx], params);
+      thread_idx, state.rngs[thread_idx], params);
 
   if (result) {
     // ray is terminated, update image and generate a new ray
@@ -1717,21 +1723,35 @@ static void trace_sample(cutrace_state& state, const cuscene_data& scene,
     if (max(radiance) > params.clamp)
       radiance = radiance * (params.clamp / max(radiance));
 
-    if (hit) {
-      state.sample_queue[sample_idx].radiance = {
-          radiance.x, radiance.y, radiance.z, 1};
-      state.sample_queue[sample_idx].albedo = albedo;
-      state.sample_queue[sample_idx].normal = normal;
-    } else if (!params.envhidden && !scene.environments.empty()) {
-      state.sample_queue[sample_idx].radiance = {
-          radiance.x, radiance.y, radiance.z, 1};
-      state.sample_queue[sample_idx].albedo = {1, 1, 1};
-      state.sample_queue[sample_idx].normal = -ray.d;
-    } else {
-      state.sample_queue[sample_idx].radiance = {0, 0, 0, 0};
-      state.sample_queue[sample_idx].albedo   = {0, 0, 0};
-      state.sample_queue[sample_idx].normal   = -ray.d;
+    float alpha = 1.0f;
+    if (!hit) {
+      if (!params.envhidden && !scene.environments.empty()) {
+        albedo = {1, 1, 1};
+      } else {
+        alpha    = 0.0f;
+        radiance = {0, 0, 0};
+        albedo   = {0, 0, 0};
+      }
+      normal = -ray.d;
     }
+
+    // atomic update image
+    float* image_ptr  = (float*)&state.image[pixel_idx];
+    float* albedo_ptr = (float*)&state.albedo[pixel_idx];
+    float* normal_ptr = (float*)&state.normal[pixel_idx];
+
+    atomicAdd(&image_ptr[0], radiance.x);
+    atomicAdd(&image_ptr[1], radiance.y);
+    atomicAdd(&image_ptr[2], radiance.z);
+    atomicAdd(&image_ptr[3], alpha);
+
+    atomicAdd(&albedo_ptr[0], albedo.x);
+    atomicAdd(&albedo_ptr[1], albedo.y);
+    atomicAdd(&albedo_ptr[2], albedo.z);
+
+    atomicAdd(&normal_ptr[0], normal.x);
+    atomicAdd(&normal_ptr[1], normal.y);
+    atomicAdd(&normal_ptr[2], normal.z);
 
     atomicAdd(num_samples_done, 1);
 
@@ -1772,8 +1792,8 @@ extern "C" __global__ void trace_pixel_extend() {
 
   auto idx = ij.y * globals.state.width + ij.x;
 
-  auto sample_idx = globals.state.path.indices[idx];
-  if (sample_idx < 0) {
+  auto pixel_idx = globals.state.path.indices[idx];
+  if (pixel_idx < 0) {
     return;
   }
 
@@ -1789,7 +1809,7 @@ extern "C" __global__ void trace_pixel_extend() {
 }
 
 // fill in the sample queue by generating #batch rays for each pixel
-extern "C" __global__ void trace_pixel_raygen() {
+extern "C" __global__ void trace_pixel_raygen(int* sample_queue_front) {
   // pixel index
   uint2 ij;
   ij.x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1809,37 +1829,19 @@ extern "C" __global__ void trace_pixel_raygen() {
     globals.state.rngs[idx]  = make_rng(98273987, idx * 2 + 1);
   }
 
-  auto  camera = globals.scene.cameras[globals.params.camera];
-  auto& rng    = globals.state.rngs[idx];
+  // scale the image by the number of samples
+  globals.state.image[idx] *= globals.state.samples;
+  globals.state.albedo[idx] *= globals.state.samples;
+  globals.state.normal[idx] *= globals.state.samples;
 
-  int stride = width * height;
-  for (int i = 0; i < globals.params.batch; ++i) {
-    auto ray = sample_camera(camera, {(int)ij.x, (int)ij.y}, {width, height},
-        rand2f(rng), rand2f(rng), globals.params.tentfilter);
-
-    globals.state.sample_queue[idx + i * stride].ray = ray;
-    globals.state.sample_queue[idx + i * stride].idx = idx;
-  }
+  // globals.state.sample_queue[idx] = {(int)idx, 0};
 
   // fetch the first sample
-  auto& path = globals.state.path;
-
-  path.indices[idx]       = idx;
-  path.radiance[idx]      = vec3f{0, 0, 0};
-  path.weights[idx]       = vec3f{1, 1, 1};
-  path.rays[idx]          = globals.state.sample_queue[idx].ray;
-  path.volume_back[idx]   = {};
-  path.volume_empty[idx]  = true;
-  path.max_roughness[idx] = 0.0f;
-  path.hit[idx]           = false;
-  path.hit_albedo[idx]    = vec3f{0, 0, 0};
-  path.hit_normal[idx]    = vec3f{0, 0, 0};
-  path.opbounces[idx]     = 0;
-  path.bounces[idx]       = 0;
+  fetch_sample(globals.state, globals.params, idx, sample_queue_front);
 }
 
-// accumulate the radiance of each sample
-extern "C" __global__ void trace_pixel_acc() {
+// postprocess the image to convert to final pixel values
+extern "C" __global__ void trace_pixel_epilogue() {
   // pixel index
   uint2 ij;
   ij.x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1852,22 +1854,13 @@ extern "C" __global__ void trace_pixel_acc() {
     return;
   }
 
-  auto sample = globals.state.samples;
-  int  idx    = ij.y * globals.state.width + ij.x;
+  float sample = globals.state.samples + globals.params.batch;
+  int   idx    = ij.y * globals.state.width + ij.x;
 
-  int stride = width * height;
-  for (int i = 0; i < globals.params.batch; ++i) {
-    globals.state.image[idx]  = lerp(globals.state.image[idx],
-         globals.state.sample_queue[idx + i * stride].radiance,
-         1.0f / (sample + 1));
-    globals.state.albedo[idx] = lerp(globals.state.albedo[idx],
-        globals.state.sample_queue[idx + i * stride].albedo,
-        1.0f / (sample + 1));
-    globals.state.normal[idx] = lerp(globals.state.normal[idx],
-        globals.state.sample_queue[idx + i * stride].normal,
-        1.0f / (sample + 1));
-    sample++;
-  }
+  // get the mean pixel value
+  globals.state.image[idx] /= sample;
+  globals.state.albedo[idx] /= sample;
+  globals.state.normal[idx] /= sample;
 }
 
 // dispatch trace_pixel for each pixel
@@ -1893,6 +1886,7 @@ extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
   cudaMalloc(&num_samples_done, sizeof(int));
   cudaMalloc(&sample_queue_front, sizeof(int));
   cudaMemset(num_samples_done, 0, sizeof(int));
+  cudaMemset(sample_queue_front, 0, sizeof(int));
   int num_samples_done_cpu = 0;
 
   int width  = globals_cpu.state.width;
@@ -1902,17 +1896,14 @@ extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
   dim3 gridSize  = {(width + blockSize.x - 1) / blockSize.x,
        (height + blockSize.y - 1) / blockSize.y, 1};
 
-  trace_pixel_raygen<<<gridSize, blockSize>>>();  // generate rays
-
-  int init_queue_front = width * height;
-  cudaMemcpy(sample_queue_front, &init_queue_front, sizeof(int),
-      cudaMemcpyHostToDevice);
+  trace_pixel_raygen<<<gridSize, blockSize>>>(
+      sample_queue_front);  // generate rays
 
   int cur            = 0;
   int target_samples = width * height * globals_cpu.params.batch;
 
   if ((long)width * height * globals_cpu.params.batch != target_samples) {
-    throw std::runtime_error("too many samples, sample queue overflow");
+    throw std::runtime_error("too many samples, overflow");
   }
 
   while (num_samples_done_cpu < target_samples) {
@@ -1929,7 +1920,7 @@ extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
     //     (float)num_samples_done_cpu / target_samples);
   }
 
-  trace_pixel_acc<<<gridSize, blockSize>>>();
+  trace_pixel_epilogue<<<gridSize, blockSize>>>();
 
   cudaFree(num_samples_done);
   cudaFree(sample_queue_front);

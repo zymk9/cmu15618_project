@@ -331,11 +331,8 @@ struct cutrace_intersection {
 };
 
 struct cutrace_sample {
-  ray3f ray      = {};
-  vec4f radiance = {};
-  vec3f albedo   = {};
-  vec3f normal   = {};
-  int   idx      = 0;
+  int idx  = 0;
+  int iter = 0;
 };
 
 // state

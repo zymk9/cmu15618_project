@@ -15,6 +15,9 @@
 #include <optix_function_table_definition.h>
 #include <optix_stubs.h>
 
+#include <algorithm>
+#include <random>
+
 #ifdef YOCTO_DENOISE
 #include <OpenImageDenoise/oidn.hpp>
 #endif
@@ -454,6 +457,15 @@ void trace_samples(cutrace_context& context, cutrace_state& state,
       offsetof(cutrace_globals, state) + offsetof(cutrace_state, samples),
       state.samples);
 
+  // randomly initialize sample queue
+  std::vector<cutrace_sample> sample_queue(state.width * state.height);
+  for (size_t i = 0; i < sample_queue.size(); ++i) {
+    sample_queue[i].idx = i;
+  }
+
+  auto rng = std::default_random_engine{};
+  std::shuffle(sample_queue.begin(), sample_queue.end(), rng);
+
   sync_gpu(context.cuda_stream);
   cutrace_samples(context.globals_buffer.device_ptr());
 
@@ -684,7 +696,7 @@ cutrace_state make_cutrace_state(cutrace_context& context,
       context.cuda_stream, state.width * state.height, (rng_state*)nullptr);
 
   state.sample_queue = make_buffer(context.cuda_stream,
-      state.width * state.height * params.batch, (cutrace_sample*)nullptr);
+      state.width * state.height, (cutrace_sample*)nullptr);
 
   state.path         = make_cutrace_path(context, state.width, state.height);
   state.intersection = make_cutrace_intersection(
@@ -730,7 +742,7 @@ void reset_cutrace_state(cutrace_context& context, cutrace_state& state,
       (rng_state*)nullptr);
 
   resize_buffer(context.cuda_stream, state.sample_queue,
-      state.width * state.height * params.batch, (cutrace_sample*)nullptr);
+      state.width * state.height, (cutrace_sample*)nullptr);
 
   state.path         = make_cutrace_path(context, state.width, state.height);
   state.intersection = make_cutrace_intersection(
