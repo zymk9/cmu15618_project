@@ -82,6 +82,8 @@ void run(const vector<string>& args) {
   add_option(cli, "dumpparams", dumpname, "dump params filename");
   add_option(cli, "edit", edit, "edit interactively");
   add_option(cli, "wbvh", params.wbvh, "use wide bvh");
+  add_option(
+      cli, "matstage", params.matstage, "enable separate material stage");
   parse_cli(cli, args);
 
   // load config
@@ -144,7 +146,7 @@ void run(const vector<string>& args) {
   print_info("build cpu bvh: {}", elapsed_formatted(timer));
 
   // build gpu bvh
-  timer    = simple_timer{};
+  timer = simple_timer{};
   cuscene_bvh bvh;
   if (params.wbvh) {
     bvh = make_cutrace_wbvh(context, scene, params, bvh_cpu.bvh);
@@ -270,7 +272,8 @@ void run(const vector<string>& args) {
       }
     };
     // run ui
-    show_gui_window({1280 + 320, 720}, "ycutrace - " + scenename, callbacks);
+    show_gui_window(
+        {1280 + 320, 720}, "wavefront trace - " + scenename, callbacks);
 #else
     throw io_error{"Interactive requires OpenGL"};
 #endif

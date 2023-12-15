@@ -386,6 +386,7 @@ struct trace_params {
   bool                  denoise        = false;
   int                   batch          = 1;
   bool                  wbvh           = false;
+  bool                  matstage       = false;
 };
 
 using cutrace_bvh = cuscene_bvh;
@@ -803,7 +804,7 @@ static shape_intersection intersect_shape_wbvh(const cushape_bvh& sbvh,
       for (auto idx = node.start; idx < node.start + node.num; idx++) {
         auto& t             = shape.triangles[bvh.primitives[idx]];
         auto  pintersection = intersect_triangle(ray, shape.positions[t.x],
-            shape.positions[t.y], shape.positions[t.z]);
+             shape.positions[t.y], shape.positions[t.z]);
         if (!pintersection.hit) continue;
         intersection = {bvh.primitives[idx], pintersection.uv,
             pintersection.distance, true};
@@ -867,7 +868,7 @@ static shape_intersection intersect_shape_bvh(const cushape_bvh& sbvh,
       for (auto idx = node.start; idx < node.start + node.num; idx++) {
         auto& t             = shape.triangles[bvh.primitives[idx]];
         auto  pintersection = intersect_triangle(ray, shape.positions[t.x],
-            shape.positions[t.y], shape.positions[t.z]);
+             shape.positions[t.y], shape.positions[t.z]);
         if (!pintersection.hit) continue;
         intersection = {bvh.primitives[idx], pintersection.uv,
             pintersection.distance, true};
@@ -932,7 +933,7 @@ static scene_intersection intersect_scene_wbvh(const cuscene_bvh& sbvh,
         auto& instance_ = scene.instances[bvh.primitives[idx]];
         auto  inv_ray   = transform_ray(inverse(instance_.frame, true), ray);
         auto  sintersection = intersect_shape_wbvh(sbvh.shapes[instance_.shape],
-            scene.shapes[instance_.shape], inv_ray, find_any);
+             scene.shapes[instance_.shape], inv_ray, find_any);
         if (!sintersection.hit) continue;
         intersection = {bvh.primitives[idx], sintersection.element,
             sintersection.uv, sintersection.distance, true};
@@ -997,7 +998,7 @@ static scene_intersection intersect_scene_bvh(const cuscene_bvh& sbvh,
         auto& instance_ = scene.instances[bvh.primitives[idx]];
         auto  inv_ray   = transform_ray(inverse(instance_.frame, true), ray);
         auto  sintersection = intersect_shape_bvh(sbvh.shapes[instance_.shape],
-            scene.shapes[instance_.shape], inv_ray, find_any);
+             scene.shapes[instance_.shape], inv_ray, find_any);
         if (!sintersection.hit) continue;
         intersection = {bvh.primitives[idx], sintersection.element,
             sintersection.uv, sintersection.distance, true};
@@ -1032,7 +1033,7 @@ static scene_intersection intersect_instance(const trace_bvh& bvh,
   for (auto element = 0; element < shape.triangles.size(); element++) {
     auto& triangle = shape.triangles[element];
     auto  isec     = intersect_triangle(tray, shape.positions[triangle.x],
-        shape.positions[triangle.y], shape.positions[triangle.z]);
+             shape.positions[triangle.y], shape.positions[triangle.z]);
     if (!isec.hit) continue;
     intersection.hit      = true;
     intersection.instance = instance_id;
@@ -1362,7 +1363,7 @@ static float sample_lights_pdf(const scene_data& scene, const trace_bvh& bvh,
         auto i = clamp(
             (int)(texcoord.x * emission_tex.width), 0, emission_tex.width - 1);
         auto j    = clamp((int)(texcoord.y * emission_tex.height), 0,
-            emission_tex.height - 1);
+               emission_tex.height - 1);
         auto prob = sample_discrete_pdf(
                         light.elements_cdf, j * emission_tex.width + i) /
                     light.elements_cdf.back();
@@ -1951,12 +1952,15 @@ static void trace_sample(cutrace_state& state, const cuscene_data& scene,
     return;
   }
 
-  // auto result = eval_path(scene, bvh, lights, state.path, state.intersection,
-  //     thread_idx, state.rngs[thread_idx], params);
-
-  auto result = eval_path_partial(scene, bvh, lights, state.path,
-      state.intersection, thread_idx, state.rngs[thread_idx], params,
-      mat_queue_fronts);
+  bool result;
+  if (mat_queue_fronts == nullptr) {
+    result = eval_path(scene, bvh, lights, state.path, state.intersection,
+        thread_idx, state.rngs[thread_idx], params);
+  } else {
+    result = eval_path_partial(scene, bvh, lights, state.path,
+        state.intersection, thread_idx, state.rngs[thread_idx], params,
+        mat_queue_fronts);
+  }
 
   if (result) {
     // ray is terminated, update image and generate a new ray
@@ -2449,7 +2453,7 @@ extern "C" __global__ void trace_pixel_epilogue() {
 }
 
 // dispatch trace_pixel for each pixel
-extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
+extern "C" void cutrace_samples_matstage(CUdeviceptr trace_globals) {
   auto globals_cpu = cutrace_globals{};
   auto result      = cuMemcpyDtoH(
       &globals_cpu, trace_globals, sizeof(cutrace_globals));
@@ -2485,7 +2489,7 @@ extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
 
   dim3 blockSize = {16, 16, 1};
   dim3 gridSize  = {(width + blockSize.x - 1) / blockSize.x,
-      (height + blockSize.y - 1) / blockSize.y, 1};
+       (height + blockSize.y - 1) / blockSize.y, 1};
 
   trace_pixel_raygen<<<gridSize, blockSize>>>(
       sample_queue_front);  // generate rays
@@ -2549,13 +2553,13 @@ extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
     cudaMemcpy(&num_samples_done_cpu, num_samples_done, sizeof(int),
         cudaMemcpyDeviceToHost);
 
-    printf("iteration %d, num samples done: %d/%d, %f\n", cur++,
-        num_samples_done_cpu, target_samples,
-        (float)num_samples_done_cpu / target_samples);
+    // printf("iteration %d, num samples done: %d/%d, %f\n", cur++,
+    //     num_samples_done_cpu, target_samples,
+    //     (float)num_samples_done_cpu / target_samples);
 
-    printf("mat queue: %d %d %d %d %d %d\n", mat_queue_fronts[0],
-        mat_queue_fronts[1], mat_queue_fronts[2], mat_queue_fronts[3],
-        mat_queue_fronts[4], mat_queue_fronts[5]);
+    // printf("mat queue: %d %d %d %d %d %d\n", mat_queue_fronts[0],
+    //     mat_queue_fronts[1], mat_queue_fronts[2], mat_queue_fronts[3],
+    //     mat_queue_fronts[4], mat_queue_fronts[5]);
   }
 
   trace_pixel_epilogue<<<gridSize, blockSize>>>();
@@ -2563,6 +2567,76 @@ extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
   cudaFree(num_samples_done);
   cudaFree(sample_queue_front);
   cudaFree(mat_queue_fronts_gpu);
+}
+
+// dispatch trace_pixel for each pixel
+extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
+  auto globals_cpu = cutrace_globals{};
+  auto result      = cuMemcpyDtoH(
+      &globals_cpu, trace_globals, sizeof(cutrace_globals));
+  if (result != CUDA_SUCCESS) {
+    const char* error_name;
+    cuGetErrorName(result, &error_name);
+    printf("cutrace_samples: cuMemcpyDtoH error %s\n", error_name);
+  }
+
+  auto cpyResult = cudaMemcpyToSymbol(
+      globals, &globals_cpu, sizeof(cutrace_globals));
+  if (cpyResult != cudaSuccess) {
+    printf("cutrace_samples: cudaMemcpyToSymbol error %s\n",
+        cudaGetErrorName(cpyResult));
+  }
+
+  int* num_samples_done;
+  int* sample_queue_front;
+
+  cudaMalloc(&num_samples_done, sizeof(int));
+  cudaMalloc(&sample_queue_front, sizeof(int));
+
+  cudaMemset(num_samples_done, 0, sizeof(int));
+  cudaMemset(sample_queue_front, 0, sizeof(int));
+
+  int num_samples_done_cpu = 0;
+
+  int width  = globals_cpu.state.width;
+  int height = globals_cpu.state.height;
+
+  dim3 blockSize = {16, 16, 1};
+  dim3 gridSize  = {(width + blockSize.x - 1) / blockSize.x,
+       (height + blockSize.y - 1) / blockSize.y, 1};
+
+  trace_pixel_raygen<<<gridSize, blockSize>>>(
+      sample_queue_front);  // generate rays
+
+  int cur            = 0;
+  int target_samples = width * height * globals_cpu.params.batch;
+
+  if ((long)width * height * globals_cpu.params.batch != target_samples) {
+    throw std::runtime_error("too many samples, overflow");
+  }
+
+  while (num_samples_done_cpu < target_samples) {
+    trace_pixel_extend<<<gridSize, blockSize>>>();
+
+    trace_pixel_logic<<<gridSize, blockSize>>>(
+        num_samples_done, sample_queue_front, nullptr);
+
+    cudaMemcpy(&num_samples_done_cpu, num_samples_done, sizeof(int),
+        cudaMemcpyDeviceToHost);
+
+    // printf("iteration %d, num samples done: %d/%d, %f\n", cur++,
+    //     num_samples_done_cpu, target_samples,
+    //     (float)num_samples_done_cpu / target_samples);
+
+    // printf("mat queue: %d %d %d %d %d %d\n", mat_queue_fronts[0],
+    //     mat_queue_fronts[1], mat_queue_fronts[2], mat_queue_fronts[3],
+    //     mat_queue_fronts[4], mat_queue_fronts[5]);
+  }
+
+  trace_pixel_epilogue<<<gridSize, blockSize>>>();
+
+  cudaFree(num_samples_done);
+  cudaFree(sample_queue_front);
 }
 
 }  // namespace yocto

@@ -54,7 +54,7 @@ void run(const vector<string>& args) {
   auto params      = trace_params{};
 
   // parse command line
-  auto cli = make_cli("ycutrace", "render with raytracing");
+  auto cli = make_cli("cuda trace", "render with raytracing");
   add_option(cli, "scene", scenename, "scene filename");
   add_option(cli, "output", outname, "output filename");
   add_option(cli, "params", paramsname, "params filename");
@@ -270,7 +270,7 @@ void run(const vector<string>& args) {
       }
     };
     // run ui
-    show_gui_window({1280 + 320, 720}, "ycutrace - " + scenename, callbacks);
+    show_gui_window({1280 + 320, 720}, "cuda trace - " + scenename, callbacks);
 #else
     throw io_error{"Interactive requires OpenGL"};
 #endif

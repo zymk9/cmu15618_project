@@ -159,6 +159,7 @@ namespace yocto {
 
 extern "C" char yocto_cutrace_ptx[];
 extern "C" void cutrace_samples(CUdeviceptr trace_globals);
+extern "C" void cutrace_samples_matstage(CUdeviceptr trace_globals);
 
 cuscene_data::cuscene_data(cuscene_data&& other) {
   cameras.swap(other.cameras);
@@ -521,7 +522,11 @@ void trace_samples(cutrace_context& context, cutrace_state& state,
   std::shuffle(sample_queue.begin(), sample_queue.end(), rng);
 
   sync_gpu(context.cuda_stream);
-  cutrace_samples(context.globals_buffer.device_ptr());
+  if (params.matstage) {
+    cutrace_samples_matstage(context.globals_buffer.device_ptr());
+  } else {
+    cutrace_samples(context.globals_buffer.device_ptr());
+  }
 
   state.samples += nsamples;
   if (params.denoise) {
@@ -936,7 +941,7 @@ void reorder_wbvh(bvh_tree& wbvh_cpu, int idx) {
   // internal node
   vector<vector<double>> traversal_cost(node.num, vector<double>(8));
   static vector<vec3f>   rays{{1, 1, 1}, {1, 1, -1}, {1, -1, 1}, {1, -1, -1},
-      {-1, 1, 1}, {-1, 1, -1}, {-1, -1, 1}, {-1, -1, -1}};
+        {-1, 1, 1}, {-1, 1, -1}, {-1, -1, 1}, {-1, -1, -1}};
 
   auto centroid = (node.bbox.max + node.bbox.min) / 2;
   for (int i = 0; i < node.num; i++) {

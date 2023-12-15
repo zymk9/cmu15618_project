@@ -111,6 +111,7 @@ struct trace_params {
   bool                  denoise        = false;
   int                   batch          = 1;
   bool                  wbvh           = false;
+  bool                  matstage       = false;
 };
 
 // Progressively computes an image.
