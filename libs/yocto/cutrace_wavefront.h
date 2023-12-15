@@ -71,9 +71,41 @@ void update_cutrace_cameras(cutrace_context& context, cuscene_data& cuscene,
     const scene_data& scene, const trace_params& params);
 
 // Build the bvh acceleration structure.
+cuscene_bvh make_cutrace_wbvh(cutrace_context& context, const scene_data& scene,
+    const trace_params& params, const scene_bvh& bvh);
+
 cuscene_bvh make_cutrace_bvh(cutrace_context& context,
     const cuscene_data& cuscene, const trace_params& params,
     const scene_bvh& bvh);
+
+struct partition_stragegy {
+  struct {
+    double optimal_cost   = -1;
+    int    left_root_num  = -1;
+    int    right_root_num = -1;
+  } record[9];
+};
+
+void get_bvh_primitive_range(
+    const bvh_tree& bvh_cpu, int idx, vector<pair<int, int>>& primitive_range);
+
+void calculate_cost(const bvh_tree& bvh_cpu, int idx, vector<double>& bvh_cost,
+    vector<partition_stragegy>&   bvh_strategy,
+    const vector<pair<int, int>>& primitive_range);
+
+void reconstruct_wbvh(const bvh_tree& bvh_cpu, bvh_tree& wbvh_cpu,
+    const vector<partition_stragegy>& bvh_strategy,
+    const vector<pair<int, int>>& primitive_range, int idx, int pos,
+    int root_num);
+
+void slot_auction(
+    const vector<vector<double>>& traversal_cost, bvh_tree& wbvh_cpu, int idx);
+
+void reorder_wbvh(bvh_tree& wbvh_cpu, int idx);
+
+bvh_tree  convert_bvh_to_wbvh(const bvh_tree& bvh_cpu);
+scene_bvh convert_bvh_to_wbvh(
+    const scene_data& scene, const scene_bvh& bvh_cpu);
 
 // Initialize state.
 cutrace_state make_cutrace_state(cutrace_context& context,

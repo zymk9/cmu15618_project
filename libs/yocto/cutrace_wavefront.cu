@@ -763,7 +763,7 @@ static shape_intersection intersect_shape_wbvh(const cushape_bvh& sbvh,
   if (bvh.nodes.empty()) return {};
 
   // node stack
-  int  node_stack[128];
+  int  node_stack[512];
   auto node_cur          = 0;
   node_stack[node_cur++] = 0;
 
@@ -790,9 +790,15 @@ static shape_intersection intersect_shape_wbvh(const cushape_bvh& sbvh,
     // intersect node, switching based on node type
     // for each type, iterate over the the primitive list
     if (node.internal) {
-      for (int idx = node.start; idx < node.start + node.num; idx++) {
-        node_stack[node_cur++] = idx;
+      int oct    = ray_dsign[0] + (ray_dsign[1] << 1) + (ray_dsign[2] << 2);
+      int offset = node.slot_map[oct];
+
+      for (int i = node.num - 1; i >= 0; i--) {
+        node_stack[node_cur + i] = node.start + offset;
+        offset                   = (offset + 1) % node.num;
       }
+
+      node_cur += node.num;
     } else if (!shape.triangles.empty()) {
       for (auto idx = node.start; idx < node.start + node.num; idx++) {
         auto& t             = shape.triangles[bvh.primitives[idx]];
@@ -885,7 +891,7 @@ static scene_intersection intersect_scene_wbvh(const cuscene_bvh& sbvh,
   if (bvh.nodes.empty()) return {};
 
   // node stack
-  int  node_stack[128];
+  int  node_stack[512];
   auto node_cur          = 0;
   node_stack[node_cur++] = 0;
 
@@ -912,9 +918,15 @@ static scene_intersection intersect_scene_wbvh(const cuscene_bvh& sbvh,
     // intersect node, switching based on node type
     // for each type, iterate over the the primitive list
     if (node.internal) {
-      for (int idx = node.start; idx < node.start + node.num; idx++) {
-        node_stack[node_cur++] = idx;
+      int oct    = ray_dsign[0] + (ray_dsign[1] << 1) + (ray_dsign[2] << 2);
+      int offset = node.slot_map[oct];
+
+      for (int i = node.num - 1; i >= 0; i--) {
+        node_stack[node_cur + i] = node.start + offset;
+        offset                   = (offset + 1) % node.num;
       }
+
+      node_cur += node.num;
     } else {
       for (auto idx = node.start; idx < node.start + node.num; idx++) {
         auto& instance_ = scene.instances[bvh.primitives[idx]];
