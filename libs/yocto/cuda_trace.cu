@@ -263,11 +263,13 @@ struct cuscene_data {
 };
 
 struct bvh_node {
-  bbox3f  bbox     = invalidb3f;
-  int32_t start    = 0;
-  int16_t num      = 0;
-  int8_t  axis     = 0;
-  bool    internal = false;
+  bbox3f  bbox        = invalidb3f;
+  int32_t start       = 0;
+  int16_t num         = 0;
+  int8_t  axis        = 0;
+  bool    internal    = false;
+  int8_t  slot_map[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  int8_t  slot_pos    = 0;
 };
 
 struct cubvh_tree {
@@ -705,7 +707,7 @@ static shape_intersection intersect_shape_wbvh(
   if (bvh.nodes.empty()) return {};
 
   // node stack
-  int  node_stack[128];
+  int  node_stack[512];
   auto node_cur          = 0;
   node_stack[node_cur++] = 0;
 
@@ -732,14 +734,20 @@ static shape_intersection intersect_shape_wbvh(
     // intersect node, switching based on node type
     // for each type, iterate over the the primitive list
     if (node.internal) {
-      for (int idx = node.start; idx < node.start + node.num; idx++) {
-        node_stack[node_cur++] = idx;
+      int oct    = ray_dsign[0] + (ray_dsign[1] << 1) + (ray_dsign[2] << 2);
+      int offset = node.slot_map[oct];
+
+      for (int i = node.num - 1; i >= 0; i--) {
+        node_stack[node_cur + i] = node.start + offset;
+        offset                   = (offset + 1) % node.num;
       }
+
+      node_cur += node.num;
     } else if (!shape.triangles.empty()) {
       for (auto idx = node.start; idx < node.start + node.num; idx++) {
         auto& t             = shape.triangles[bvh.primitives[idx]];
         auto  pintersection = intersect_triangle(ray, shape.positions[t.x],
-             shape.positions[t.y], shape.positions[t.z]);
+            shape.positions[t.y], shape.positions[t.z]);
         if (!pintersection.hit) continue;
         intersection = {bvh.primitives[idx], pintersection.uv,
             pintersection.distance, true};
@@ -800,7 +808,7 @@ static shape_intersection intersect_shape_bvh(
       for (auto idx = node.start; idx < node.start + node.num; idx++) {
         auto& t             = shape.triangles[bvh.primitives[idx]];
         auto  pintersection = intersect_triangle(ray, shape.positions[t.x],
-             shape.positions[t.y], shape.positions[t.z]);
+            shape.positions[t.y], shape.positions[t.z]);
         if (!pintersection.hit) continue;
         intersection = {bvh.primitives[idx], pintersection.uv,
             pintersection.distance, true};
@@ -821,7 +829,7 @@ static scene_intersection intersect_scene_wbvh(
   if (bvh.nodes.empty()) return {};
 
   // node stack
-  int  node_stack[128];
+  int  node_stack[512];
   auto node_cur          = 0;
   node_stack[node_cur++] = 0;
 
@@ -848,15 +856,21 @@ static scene_intersection intersect_scene_wbvh(
     // intersect node, switching based on node type
     // for each type, iterate over the the primitive list
     if (node.internal) {
-      for (int idx = node.start; idx < node.start + node.num; idx++) {
-        node_stack[node_cur++] = idx;
+      int oct    = ray_dsign[0] + (ray_dsign[1] << 1) + (ray_dsign[2] << 2);
+      int offset = node.slot_map[oct];
+
+      for (int i = node.num - 1; i >= 0; i--) {
+        node_stack[node_cur + i] = node.start + offset;
+        offset                   = (offset + 1) % node.num;
       }
+
+      node_cur += node.num;
     } else {
       for (auto idx = node.start; idx < node.start + node.num; idx++) {
         auto& instance_ = scene.instances[bvh.primitives[idx]];
         auto  inv_ray   = transform_ray(inverse(instance_.frame, true), ray);
         auto  sintersection = intersect_shape_wbvh(sbvh.shapes[instance_.shape],
-             scene.shapes[instance_.shape], inv_ray);
+            scene.shapes[instance_.shape], inv_ray);
         if (!sintersection.hit) continue;
         intersection = {bvh.primitives[idx], sintersection.element,
             sintersection.uv, sintersection.distance, true};
@@ -918,7 +932,7 @@ static scene_intersection intersect_scene_bvh(
         auto& instance_ = scene.instances[bvh.primitives[idx]];
         auto  inv_ray   = transform_ray(inverse(instance_.frame, true), ray);
         auto  sintersection = intersect_shape_bvh(sbvh.shapes[instance_.shape],
-             scene.shapes[instance_.shape], inv_ray);
+            scene.shapes[instance_.shape], inv_ray);
         if (!sintersection.hit) continue;
         intersection = {bvh.primitives[idx], sintersection.element,
             sintersection.uv, sintersection.distance, true};
@@ -934,8 +948,7 @@ static scene_intersection intersect_scene(
     const cuscene_bvh& sbvh, const scene_data& scene, const ray3f& ray_) {
   if (globals.params.wbvh) {
     return intersect_scene_wbvh(sbvh, scene, ray_);
-  }
-  else {
+  } else {
     return intersect_scene_bvh(sbvh, scene, ray_);
   }
 }
@@ -951,7 +964,7 @@ static scene_intersection intersect_instance(const trace_bvh& bvh,
   for (auto element = 0; element < shape.triangles.size(); element++) {
     auto& triangle = shape.triangles[element];
     auto  isec     = intersect_triangle(tray, shape.positions[triangle.x],
-             shape.positions[triangle.y], shape.positions[triangle.z]);
+        shape.positions[triangle.y], shape.positions[triangle.z]);
     if (!isec.hit) continue;
     intersection.hit      = true;
     intersection.instance = instance_id;
@@ -1281,7 +1294,7 @@ static float sample_lights_pdf(const scene_data& scene, const trace_bvh& bvh,
         auto i = clamp(
             (int)(texcoord.x * emission_tex.width), 0, emission_tex.width - 1);
         auto j    = clamp((int)(texcoord.y * emission_tex.height), 0,
-               emission_tex.height - 1);
+            emission_tex.height - 1);
         auto prob = sample_discrete_pdf(
                         light.elements_cdf, j * emission_tex.width + i) /
                     light.elements_cdf.back();
@@ -1733,10 +1746,10 @@ static trace_result trace_pathmis(const scene_data& scene, const trace_bvh& bvh,
                   scene.instances[intersection.instance], intersection.element,
                   intersection.uv);
               emission      = eval_emission(material,
-                       eval_shading_normal(scene,
-                           scene.instances[intersection.instance],
-                           intersection.element, intersection.uv, -incoming),
-                       -incoming);
+                  eval_shading_normal(scene,
+                      scene.instances[intersection.instance],
+                      intersection.element, intersection.uv, -incoming),
+                  -incoming);
             }
             radiance += weight * bsdfcos * emission * mis_weight;
           }
@@ -2308,7 +2321,7 @@ static void trace_sample(cutrace_state& state, const cuscene_data& scene,
   // auto  sampler = get_trace_sampler_func(params);
   auto idx    = state.width * j + i;
   auto ray    = sample_camera(camera, {i, j}, {state.width, state.height},
-         rand2f(state.rngs[idx]), rand2f(state.rngs[idx]), params.tentfilter);
+      rand2f(state.rngs[idx]), rand2f(state.rngs[idx]), params.tentfilter);
   auto result = trace_sampler(scene, bvh, lights, ray, state.rngs[idx], params);
   // auto [radiance, hit, albedo, normal] = sampler(
   //    scene, bvh, lights, ray, state.rngs[idx], params);
@@ -2390,7 +2403,7 @@ extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
 
   dim3 blockSize = {16, 16, 1};
   dim3 gridSize  = {(width + blockSize.x - 1) / blockSize.x,
-       (height + blockSize.y - 1) / blockSize.y, 1};
+      (height + blockSize.y - 1) / blockSize.y, 1};
 
   trace_pixel<<<gridSize, blockSize>>>();
 }

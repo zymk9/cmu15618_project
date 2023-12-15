@@ -472,11 +472,13 @@ namespace yocto {
 // and the split axis. Leaf and internal nodes are identical, except that
 // indices refer to primitives for leaf nodes or other nodes for internal nodes.
 struct bvh_node {
-  bbox3f  bbox     = invalidb3f;
-  int32_t start    = 0;
-  int16_t num      = 0;
-  int8_t  axis     = 0;
-  bool    internal = false;
+  bbox3f  bbox        = invalidb3f;
+  int32_t start       = 0;
+  int16_t num         = 0;
+  int8_t  axis        = 0;
+  bool    internal    = false;
+  int8_t  slot_map[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+  int8_t  slot_pos    = 0;
 };
 
 // BVH tree stored as a node array with the tree structure is encoded using
