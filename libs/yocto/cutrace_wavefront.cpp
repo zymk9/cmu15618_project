@@ -253,6 +253,57 @@ cutrace_context& cutrace_context::operator=(cutrace_context&& other) {
   return *this;
 }
 
+cutrace_material_queue::cutrace_material_queue(cutrace_material_queue&& other) {
+  indices.swap(other.indices);
+  emission.swap(other.emission);
+  color.swap(other.color);
+  opacity.swap(other.opacity);
+  roughness.swap(other.roughness);
+  metallic.swap(other.metallic);
+  ior.swap(other.ior);
+  density.swap(other.density);
+  scattering.swap(other.scattering);
+  scanisotropy.swap(other.scanisotropy);
+  trdepth.swap(other.trdepth);
+
+  outgoing.swap(other.outgoing);
+  normal.swap(other.normal);
+}
+cutrace_material_queue& cutrace_material_queue::operator=(
+    cutrace_material_queue&& other) {
+  indices.swap(other.indices);
+  emission.swap(other.emission);
+  color.swap(other.color);
+  opacity.swap(other.opacity);
+  roughness.swap(other.roughness);
+  metallic.swap(other.metallic);
+  ior.swap(other.ior);
+  density.swap(other.density);
+  scattering.swap(other.scattering);
+  scanisotropy.swap(other.scanisotropy);
+  trdepth.swap(other.trdepth);
+
+  outgoing.swap(other.outgoing);
+  normal.swap(other.normal);
+  return *this;
+}
+cutrace_material_queue::~cutrace_material_queue() {
+  clear_buffer(indices);
+  clear_buffer(emission);
+  clear_buffer(color);
+  clear_buffer(opacity);
+  clear_buffer(roughness);
+  clear_buffer(metallic);
+  clear_buffer(ior);
+  clear_buffer(density);
+  clear_buffer(scattering);
+  clear_buffer(scanisotropy);
+  clear_buffer(trdepth);
+
+  clear_buffer(outgoing);
+  clear_buffer(normal);
+}
+
 cutrace_state::cutrace_state(cutrace_state&& other) {
   std::swap(width, other.width);
   std::swap(height, other.height);
@@ -267,6 +318,8 @@ cutrace_state::cutrace_state(cutrace_state&& other) {
   denoiser_scratch.swap(other.denoiser_scratch);
 
   sample_queue.swap(other.sample_queue);
+
+  material_queue = std::move(other.material_queue);
 
   path         = std::move(other.path);
   intersection = std::move(other.intersection);
@@ -285,6 +338,8 @@ cutrace_state& cutrace_state::operator=(cutrace_state&& other) {
   denoiser_scratch.swap(other.denoiser_scratch);
 
   sample_queue.swap(other.sample_queue);
+
+  material_queue = std::move(other.material_queue);
 
   path         = std::move(other.path);
   intersection = std::move(other.intersection);
@@ -431,7 +486,6 @@ void trace_start(cutrace_context& context, cutrace_state& state,
     const cuscene_data& cuscene, const cuscene_bvh& bvh,
     const cutrace_lights& lights, const scene_data& scene,
     const trace_params& params) {
-  auto globals = cutrace_globals{};
   update_buffer_value(context.cuda_stream, context.globals_buffer,
       offsetof(cutrace_globals, state), state);
   update_buffer_value(context.cuda_stream, context.globals_buffer,
@@ -698,6 +752,9 @@ cutrace_state make_cutrace_state(cutrace_context& context,
   state.sample_queue = make_buffer(context.cuda_stream,
       state.width * state.height, (cutrace_sample*)nullptr);
 
+  state.material_queue = make_material_queue(
+      context, state.width, state.height);
+
   state.path         = make_cutrace_path(context, state.width, state.height);
   state.intersection = make_cutrace_intersection(
       context, state.width, state.height);
@@ -743,6 +800,9 @@ void reset_cutrace_state(cutrace_context& context, cutrace_state& state,
 
   resize_buffer(context.cuda_stream, state.sample_queue,
       state.width * state.height, (cutrace_sample*)nullptr);
+
+  state.material_queue = make_material_queue(
+      context, state.width, state.height);
 
   state.path         = make_cutrace_path(context, state.width, state.height);
   state.intersection = make_cutrace_intersection(
@@ -815,6 +875,30 @@ cutrace_intersection make_cutrace_intersection(
   return intersection;
 }
 
+cutrace_material_queue make_material_queue(
+    cutrace_context& context, int width, int height) {
+  auto queue = cutrace_material_queue{};
+  auto size  = width * height;
+
+  queue.indices    = make_buffer(context.cuda_stream, size * 6, (int*)nullptr);
+  queue.emission   = make_buffer(context.cuda_stream, size, (vec3f*)nullptr);
+  queue.color      = make_buffer(context.cuda_stream, size, (vec3f*)nullptr);
+  queue.opacity    = make_buffer(context.cuda_stream, size, (float*)nullptr);
+  queue.roughness  = make_buffer(context.cuda_stream, size, (float*)nullptr);
+  queue.metallic   = make_buffer(context.cuda_stream, size, (float*)nullptr);
+  queue.ior        = make_buffer(context.cuda_stream, size, (float*)nullptr);
+  queue.density    = make_buffer(context.cuda_stream, size, (vec3f*)nullptr);
+  queue.scattering = make_buffer(context.cuda_stream, size, (vec3f*)nullptr);
+  queue.scanisotropy = make_buffer(context.cuda_stream, size, (float*)nullptr);
+  queue.trdepth      = make_buffer(context.cuda_stream, size, (float*)nullptr);
+
+  queue.outgoing = make_buffer(context.cuda_stream, size, (vec3f*)nullptr);
+  queue.normal   = make_buffer(context.cuda_stream, size, (vec3f*)nullptr);
+
+  sync_gpu(context.cuda_stream);
+  return queue;
+}
+
 // Init trace lights
 cutrace_lights make_cutrace_lights(cutrace_context& context,
     const scene_data& scene, const trace_params& params) {
@@ -836,14 +920,12 @@ cutrace_lights make_cutrace_lights(cutrace_context& context,
 image_data cutrace_image(const scene_data& scene, const trace_params& params,
     const scene_bvh& bvh_cpu) {
   // initialization
-  auto context      = make_cutrace_context(params);
-  auto cuscene      = make_cutrace_scene(context, scene, params);
-  auto bvh          = make_cutrace_bvh(context, cuscene, params, bvh_cpu);
-  auto state        = make_cutrace_state(context, scene, params);
-  auto lights       = make_cutrace_lights(context, scene, params);
-  auto path         = make_cutrace_path(context, state.width, state.height);
-  auto intersection = make_cutrace_intersection(
-      context, state.width, state.height);
+  auto context = make_cutrace_context(params);
+  auto cuscene = make_cutrace_scene(context, scene, params);
+  auto bvh     = make_cutrace_bvh(context, cuscene, params, bvh_cpu);
+  auto state   = make_cutrace_state(context, scene, params);
+  auto lights  = make_cutrace_lights(context, scene, params);
+  auto path    = make_cutrace_path(context, state.width, state.height);
 
   // rendering
   trace_start(context, state, cuscene, bvh, lights, scene, params);

@@ -56,6 +56,7 @@ struct cuscene_bvh;
 struct cutrace_state;
 struct cutrace_path;
 struct cutrace_intersection;
+struct cutrace_material_queue;
 struct cutrace_lights;
 struct cutrace_context;
 using cutrace_bvh = cuscene_bvh;
@@ -85,6 +86,9 @@ cutrace_path make_cutrace_path(cutrace_context& context, int width, int height);
 
 // Initialize intersection buffers.
 cutrace_intersection make_cutrace_intersection(
+    cutrace_context& context, int width, int height);
+
+cutrace_material_queue make_material_queue(
     cutrace_context& context, int width, int height);
 
 // Initialize lights.
@@ -335,6 +339,31 @@ struct cutrace_sample {
   int iter = 0;
 };
 
+struct cutrace_material_queue {
+  // material queue
+  cuspan<int> indices = {};  // path indices
+
+  // material point info
+  cuspan<vec3f> emission     = {};
+  cuspan<vec3f> color        = {};
+  cuspan<float> opacity      = {};
+  cuspan<float> roughness    = {};
+  cuspan<float> metallic     = {};
+  cuspan<float> ior          = {};
+  cuspan<vec3f> density      = {};
+  cuspan<vec3f> scattering   = {};
+  cuspan<float> scanisotropy = {};
+  cuspan<float> trdepth      = {};
+
+  cuspan<vec3f> outgoing = {};
+  cuspan<vec3f> normal   = {};
+
+  cutrace_material_queue() {}
+  cutrace_material_queue(cutrace_material_queue&&);
+  cutrace_material_queue& operator=(cutrace_material_queue&&);
+  ~cutrace_material_queue();
+};
+
 // state
 struct cutrace_state {
   int               width            = 0;
@@ -350,6 +379,8 @@ struct cutrace_state {
   cuspan<byte>      denoiser_scratch = {};
 
   cuspan<cutrace_sample> sample_queue = {};
+
+  cutrace_material_queue material_queue = {};
 
   cutrace_path         path         = {};
   cutrace_intersection intersection = {};

@@ -174,6 +174,13 @@ namespace yocto {
 constexpr int invalidid = -1;
 struct material_point;
 
+enum struct material_type {
+  // clang-format off
+  matte, glossy, reflective, transparent, refractive, subsurface, volumetric, 
+  gltfpbr
+  // clang-format on
+};
+
 struct cutrace_path {
   cuspan<int>            indices       = {};
   cuspan<vec3f>          radiance      = {};
@@ -202,6 +209,26 @@ struct cutrace_sample {
   int iters = 0;
 };
 
+struct cutrace_material_queue {
+  // material queue
+  cuspan<int> indices = {};  // path indices
+
+  // material point info
+  cuspan<vec3f> emission     = {};
+  cuspan<vec3f> color        = {};
+  cuspan<float> opacity      = {};
+  cuspan<float> roughness    = {};
+  cuspan<float> metallic     = {};
+  cuspan<float> ior          = {};
+  cuspan<vec3f> density      = {};
+  cuspan<vec3f> scattering   = {};
+  cuspan<float> scanisotropy = {};
+  cuspan<float> trdepth      = {};
+
+  cuspan<vec3f> outgoing = {};
+  cuspan<vec3f> normal   = {};
+};
+
 struct cutrace_state {
   int               width            = 0;
   int               height           = 0;
@@ -216,6 +243,8 @@ struct cutrace_state {
   cuspan<byte>      denoiser_scratch = {};
 
   cuspan<cutrace_sample> sample_queue = {};
+
+  cutrace_material_queue material_queue = {};
 
   cutrace_path         path         = {};
   cutrace_intersection intersection = {};
@@ -239,13 +268,6 @@ struct cutexture_data {
   bool                clamp   = false;
   cudaTextureObject_t texture = 0;
   cudaArray_t         array   = nullptr;
-};
-
-enum struct material_type {
-  // clang-format off
-  matte, glossy, reflective, transparent, refractive, subsurface, volumetric, 
-  gltfpbr
-  // clang-format on
 };
 
 struct cumaterial_data {
@@ -1496,8 +1518,36 @@ static trace_result trace_path(const scene_data& scene, const trace_bvh& bvh,
   return {radiance, hit, hit_albedo, hit_normal};
 }
 
-// eval one ray, returns true if the ray terminated
-static bool eval_ray(const scene_data& scene, const trace_bvh& bvh,
+static void submit_material(const material_point& material, const vec3f& normal,
+    const vec3f& outgoing, int idx, int* queue_fronts) {
+  int material_map[8] = {0, 1, 2, 3, 4, 4, 4, 5};
+  int material_id     = material_map[(int)(material.type)];
+
+  int   queue_size     = globals.state.width * globals.state.height;
+  auto& material_queue = globals.state.material_queue;
+
+  int queue_idx = atomicAdd(&queue_fronts[material_id], 1);
+  queue_idx += material_id * queue_size;
+
+  // write material
+  material_queue.indices[queue_idx] = idx;
+  material_queue.emission[idx]      = material.emission;
+  material_queue.color[idx]         = material.color;
+  material_queue.opacity[idx]       = material.opacity;
+  material_queue.roughness[idx]     = material.roughness;
+  material_queue.metallic[idx]      = material.metallic;
+  material_queue.ior[idx]           = material.ior;
+  material_queue.density[idx]       = material.density;
+  material_queue.scattering[idx]    = material.scattering;
+  material_queue.scanisotropy[idx]  = material.scanisotropy;
+  material_queue.trdepth[idx]       = material.trdepth;
+
+  material_queue.outgoing[idx] = outgoing;
+  material_queue.normal[idx]   = normal;
+}
+
+// eval one segment of the path, returns true if the ray terminated
+static bool eval_path(const scene_data& scene, const trace_bvh& bvh,
     const trace_lights& lights, cutrace_path& paths,
     const cutrace_intersection& intersections, int idx, rng_state& rng,
     const trace_params& params) {
@@ -1655,6 +1705,187 @@ static bool eval_ray(const scene_data& scene, const trace_bvh& bvh,
   return false;
 }
 
+// do not eval material
+static bool eval_path_partial(const scene_data& scene, const trace_bvh& bvh,
+    const trace_lights& lights, cutrace_path& paths,
+    const cutrace_intersection& intersections, int idx, rng_state& rng,
+    const trace_params& params, int* queue_fronts) {
+  // read from globals
+  // we need to write back to globals at the end if the ray is not terminated
+  auto radiance      = paths.radiance[idx];
+  auto weight        = paths.weights[idx];
+  auto ray           = paths.rays[idx];
+  auto volume_back   = paths.volume_back[idx];
+  auto volume_empty  = paths.volume_empty[idx];
+  auto max_roughness = paths.max_roughness[idx];
+  auto opbounce      = paths.opbounces[idx];
+  auto bounce        = paths.bounces[idx];
+
+  // material eval terminates the ray
+  if (weight == vec3f{0, 0, 0} || !isfinite(weight)) return true;
+
+  // read intersection from globals
+  auto intersection = scene_intersection{intersections.instance[idx],
+      intersections.element[idx], intersections.uv[idx],
+      intersections.distance[idx], intersections.hit[idx]};
+
+  if (!intersection.hit) {
+    if (bounce > 0 || !params.envhidden) {
+      paths.radiance[idx] = radiance + weight * eval_environment(scene, ray.d);
+    }
+    return true;
+  }
+
+  // handle transmission if inside a volume
+  auto in_volume = false;
+  if (!volume_empty) {
+    auto distance = sample_transmittance(
+        volume_back.density, intersection.distance, rand1f(rng), rand1f(rng));
+    weight *= eval_transmittance(volume_back.density, distance) /
+              sample_transmittance_pdf(
+                  volume_back.density, distance, intersection.distance);
+    paths.weights[idx]    = weight;
+    in_volume             = distance < intersection.distance;
+    intersection.distance = distance;
+  }
+
+  // switch between surface and volume
+  bool sample_mat = false;
+  bool weight_unk = false;
+  if (!in_volume) {
+    // prepare shading point
+    auto outgoing = -ray.d;
+    auto position = eval_shading_position(scene, intersection, outgoing);
+    auto normal   = eval_shading_normal(scene, intersection, outgoing);
+    auto material = eval_material(scene, intersection);
+
+    // correct roughness
+    if (params.nocaustics) {
+      max_roughness            = max(material.roughness, max_roughness);
+      paths.max_roughness[idx] = max_roughness;
+      material.roughness       = max_roughness;
+    }
+
+    // handle opacity
+    if (material.opacity < 1 && rand1f(rng) >= material.opacity) {
+      if (opbounce > 128) {
+        return true;
+      }
+      paths.opbounces[idx] = opbounce + 1;
+      paths.rays[idx]      = {position + ray.d * 1e-2f, ray.d};
+      return false;
+    }
+
+    // set hit variables
+    if (bounce == 0) {
+      paths.hit[idx]        = true;
+      paths.hit_albedo[idx] = material.color;
+      paths.hit_normal[idx] = normal;
+    }
+
+    // accumulate emission
+    radiance += weight * eval_emission(material, normal, outgoing);
+    paths.radiance[idx] = radiance;
+
+    // next direction
+    auto incoming = vec3f{0, 0, 0};
+    if (!is_delta(material)) {
+      if (rand1f(rng) < 0.5f) {
+        sample_mat = true;
+        // incoming = sample_bsdfcos(
+        //     material, normal, outgoing, rand1f(rng), rand2f(rng));
+      } else {
+        incoming = sample_lights(
+            scene, lights, position, rand1f(rng), rand1f(rng), rand2f(rng));
+        if (incoming == vec3f{0, 0, 0}) return true;
+      }
+
+      if (material.roughness == 0) {
+        return true;
+      }
+
+      weight_unk = true;
+      // if (incoming == vec3f{0, 0, 0}) return true;
+      // weight *=
+      //     eval_bsdfcos(material, normal, outgoing, incoming) /
+      //     (0.5f * sample_bsdfcos_pdf(material, normal, outgoing, incoming) +
+      //         0.5f * sample_lights_pdf(scene, bvh, lights, position,
+      //         incoming));
+    } else {
+      incoming = sample_delta(material, normal, outgoing, rand1f(rng));
+      weight *= eval_delta(material, normal, outgoing, incoming) /
+                sample_delta_pdf(material, normal, outgoing, incoming);
+    }
+
+    // update volume stack
+    if (!sample_mat && is_volumetric(scene, intersection) &&
+        dot(normal, outgoing) * dot(normal, incoming) < 0) {
+      if (volume_empty) {
+        paths.volume_back[idx]  = eval_material(scene, intersection);
+        paths.volume_empty[idx] = false;
+      } else {
+        paths.volume_empty[idx] = true;
+      }
+    }
+
+    if (weight_unk && bounce + 1 < params.bounces) {
+      // do not eval material if last bounce
+      submit_material(material, normal, outgoing, idx, queue_fronts);
+    }
+
+    // setup next iteration
+    ray = {position, incoming};
+  } else {
+    // prepare shading point
+    auto outgoing = -ray.d;
+    auto position = ray.o + ray.d * intersection.distance;
+
+    // accumulate emission
+    // radiance += weight * eval_volemission(emission, outgoing);
+
+    // next direction
+    auto incoming = vec3f{0, 0, 0};
+    if (rand1f(rng) < 0.5f) {
+      incoming = sample_scattering(
+          volume_back, outgoing, rand1f(rng), rand2f(rng));
+    } else {
+      incoming = sample_lights(
+          scene, lights, position, rand1f(rng), rand1f(rng), rand2f(rng));
+    }
+    if (incoming == vec3f{0, 0, 0}) return true;
+    weight *=
+        eval_scattering(volume_back, outgoing, incoming) /
+        (0.5f * sample_scattering_pdf(volume_back, outgoing, incoming) +
+            0.5f * sample_lights_pdf(scene, bvh, lights, position, incoming));
+
+    // setup next iteration
+    ray = {position, incoming};
+  }
+
+  if (!weight_unk) {
+    // check weight
+    if (weight == vec3f{0, 0, 0} || !isfinite(weight)) return true;
+
+    // russian roulette
+    if (bounce > 3) {
+      auto rr_prob = min((float)0.99, max(weight));
+      if (rand1f(rng) >= rr_prob) return true;
+      weight *= 1 / rr_prob;
+    }
+  }
+
+  // finish eval one segment
+  bounce++;
+  if (bounce >= params.bounces) return true;
+
+  // write to globals
+  paths.rays[idx]    = ray;
+  paths.weights[idx] = weight;
+  paths.bounces[idx] = bounce;
+
+  return false;
+}
+
 static void fetch_sample(cutrace_state& state, const trace_params& params,
     int idx, int* sample_queue_front) {
   int queue_size = state.width * state.height * params.batch;
@@ -1698,16 +1929,20 @@ static void fetch_sample(cutrace_state& state, const trace_params& params,
 
 static void trace_sample(cutrace_state& state, const cuscene_data& scene,
     const cutrace_bvh& bvh, const cutrace_lights& lights, int i, int j,
-    const trace_params& params, int* num_samples_done,
-    int* sample_queue_front) {
+    const trace_params& params, int* num_samples_done, int* sample_queue_front,
+    int* mat_queue_fronts) {
   auto thread_idx = state.width * j + i;
   auto pixel_idx  = state.path.indices[thread_idx];
   if (pixel_idx < 0) {
     return;
   }
 
-  auto result = eval_ray(scene, bvh, lights, state.path, state.intersection,
-      thread_idx, state.rngs[thread_idx], params);
+  // auto result = eval_path(scene, bvh, lights, state.path, state.intersection,
+  //     thread_idx, state.rngs[thread_idx], params);
+
+  auto result = eval_path_partial(scene, bvh, lights, state.path,
+      state.intersection, thread_idx, state.rngs[thread_idx], params,
+      mat_queue_fronts);
 
   if (result) {
     // ray is terminated, update image and generate a new ray
@@ -1759,11 +1994,341 @@ static void trace_sample(cutrace_state& state, const cuscene_data& scene,
   }
 }
 
+static material_point get_material_from_queue(material_type type, int idx) {
+  material_point material;
+  material.type         = type;
+  material.emission     = globals.state.material_queue.emission[idx];
+  material.color        = globals.state.material_queue.color[idx];
+  material.opacity      = globals.state.material_queue.opacity[idx];
+  material.roughness    = globals.state.material_queue.roughness[idx];
+  material.metallic     = globals.state.material_queue.metallic[idx];
+  material.ior          = globals.state.material_queue.ior[idx];
+  material.density      = globals.state.material_queue.density[idx];
+  material.scattering   = globals.state.material_queue.scattering[idx];
+  material.scanisotropy = globals.state.material_queue.scanisotropy[idx];
+  material.trdepth      = globals.state.material_queue.trdepth[idx];
+
+  return material;
+}
+
+static void eval_material_epilogue(material_type type, int idx,
+    const vec3f& normal, const vec3f& outgoing, const vec3f& incoming,
+    const vec3f& weight) {
+  bool is_volumetric = type == material_type::refractive ||
+                       type == material_type::volumetric ||
+                       type == material_type::subsurface;
+
+  auto& paths = globals.state.path;
+
+  // update volume stack
+  if (is_volumetric && dot(normal, outgoing) * dot(normal, incoming) < 0) {
+    if (paths.volume_empty[idx]) {
+      paths.volume_back[idx]  = get_material_from_queue(type, idx);
+      paths.volume_empty[idx] = false;
+    } else {
+      paths.volume_empty[idx] = true;
+    }
+  }
+
+  // russian roulette
+  if (paths.bounces[idx] > 4) {
+    auto rr_prob = min((float)0.99, max(weight));
+    if (rand1f(globals.state.rngs[idx]) >= rr_prob) {
+      paths.weights[idx] = {0, 0, 0};
+      return;
+    }
+    paths.weights[idx] *= 1 / rr_prob;
+  }
+}
+
+extern "C" __global__ void eval_matte_kernel(int num_materials) {
+  int mat_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (mat_idx >= num_materials) {
+    return;
+  }
+
+  auto& material_queue = globals.state.material_queue;
+  int   queue_size     = globals.state.width * globals.state.height;
+  int   offset         = 0;
+  int   queue_idx      = offset * queue_size + mat_idx;
+  int   idx            = material_queue.indices[queue_idx];
+
+  auto  color    = material_queue.color[idx];
+  auto  normal   = material_queue.normal[idx];
+  auto  outgoing = material_queue.outgoing[idx];
+  auto& rng      = globals.state.rngs[idx];
+  auto  rn       = rand2f(rng);
+
+  auto incoming = globals.state.path.rays[idx].d;
+  auto position = globals.state.path.rays[idx].o;
+  if (incoming == vec3f{0, 0, 0}) {  // otherwise use ray direction
+    incoming = sample_matte(color, normal, outgoing, rn);
+  }
+
+  if (incoming == vec3f{0, 0, 0}) {
+    globals.state.path.weights[idx] = {0, 0, 0};  // terminate
+    return;
+  }
+
+  auto bsdfcos     = eval_matte(color, normal, outgoing, incoming);
+  auto bsdfcos_pdf = sample_matte_pdf(color, normal, outgoing, incoming);
+  auto lights_pdf  = sample_lights_pdf(
+      globals.scene, globals.bvh, globals.lights, position, incoming);
+
+  globals.state.path.weights[idx] *= bsdfcos /
+                                     (0.5f * bsdfcos_pdf + 0.5f * lights_pdf);
+
+  eval_material_epilogue(material_type::matte, idx, normal, outgoing, incoming,
+      globals.state.path.weights[idx]);
+
+  globals.state.path.rays[idx] = {position, incoming};
+}
+
+extern "C" __global__ void eval_glossy_kernel(int num_materials) {
+  int mat_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (mat_idx >= num_materials) {
+    return;
+  }
+
+  auto& material_queue = globals.state.material_queue;
+  int   queue_size     = globals.state.width * globals.state.height;
+  int   offset         = 1;
+  int   queue_idx      = offset * queue_size + mat_idx;
+  int   idx            = material_queue.indices[queue_idx];
+
+  auto  color     = material_queue.color[idx];
+  auto  ior       = material_queue.ior[idx];
+  auto  roughness = material_queue.roughness[idx];
+  auto  normal    = material_queue.normal[idx];
+  auto  outgoing  = material_queue.outgoing[idx];
+  auto& rng       = globals.state.rngs[idx];
+  auto  rn        = rand2f(rng);
+  auto  rnl       = rand1f(rng);
+
+  auto incoming = globals.state.path.rays[idx].d;
+  auto position = globals.state.path.rays[idx].o;
+  if (incoming == vec3f{0, 0, 0}) {  // otherwise use ray direction
+    incoming = sample_glossy(color, ior, roughness, normal, outgoing, rnl, rn);
+  }
+
+  if (incoming == vec3f{0, 0, 0}) {
+    globals.state.path.weights[idx] = {0, 0, 0};  // terminate
+    return;
+  }
+
+  auto bsdfcos = eval_glossy(color, ior, roughness, normal, outgoing, incoming);
+  auto bsdfcos_pdf = sample_glossy_pdf(
+      color, ior, roughness, normal, outgoing, incoming);
+  auto lights_pdf = sample_lights_pdf(
+      globals.scene, globals.bvh, globals.lights, position, incoming);
+
+  globals.state.path.weights[idx] *= bsdfcos /
+                                     (0.5f * bsdfcos_pdf + 0.5f * lights_pdf);
+
+  eval_material_epilogue(material_type::glossy, idx, normal, outgoing, incoming,
+      globals.state.path.weights[idx]);
+
+  globals.state.path.rays[idx] = {position, incoming};
+}
+
+extern "C" __global__ void eval_reflective_kernel(int num_materials) {
+  int mat_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (mat_idx >= num_materials) {
+    return;
+  }
+
+  auto& material_queue = globals.state.material_queue;
+  int   queue_size     = globals.state.width * globals.state.height;
+  int   offset         = 2;
+  int   queue_idx      = offset * queue_size + mat_idx;
+  int   idx            = material_queue.indices[queue_idx];
+
+  auto  color     = material_queue.color[idx];
+  auto  roughness = material_queue.roughness[idx];
+  auto  normal    = material_queue.normal[idx];
+  auto  outgoing  = material_queue.outgoing[idx];
+  auto& rng       = globals.state.rngs[idx];
+  auto  rn        = rand2f(rng);
+
+  auto incoming = globals.state.path.rays[idx].d;
+  auto position = globals.state.path.rays[idx].o;
+  if (incoming == vec3f{0, 0, 0}) {  // otherwise use ray direction
+    incoming = sample_reflective(color, roughness, normal, outgoing, rn);
+  }
+
+  if (incoming == vec3f{0, 0, 0}) {
+    globals.state.path.weights[idx] = {0, 0, 0};  // terminate
+    return;
+  }
+
+  auto bsdfcos = eval_reflective(color, roughness, normal, outgoing, incoming);
+  auto bsdfcos_pdf = sample_reflective_pdf(
+      color, roughness, normal, outgoing, incoming);
+  auto lights_pdf = sample_lights_pdf(
+      globals.scene, globals.bvh, globals.lights, position, incoming);
+
+  globals.state.path.weights[idx] *= bsdfcos /
+                                     (0.5f * bsdfcos_pdf + 0.5f * lights_pdf);
+
+  eval_material_epilogue(material_type::reflective, idx, normal, outgoing,
+      incoming, globals.state.path.weights[idx]);
+
+  globals.state.path.rays[idx] = {position, incoming};
+}
+
+extern "C" __global__ void eval_transparent_kernel(int num_materials) {
+  int mat_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (mat_idx >= num_materials) {
+    return;
+  }
+
+  auto& material_queue = globals.state.material_queue;
+  int   queue_size     = globals.state.width * globals.state.height;
+  int   offset         = 3;
+  int   queue_idx      = offset * queue_size + mat_idx;
+  int   idx            = material_queue.indices[queue_idx];
+
+  auto  color     = material_queue.color[idx];
+  auto  ior       = material_queue.ior[idx];
+  auto  roughness = material_queue.roughness[idx];
+  auto  normal    = material_queue.normal[idx];
+  auto  outgoing  = material_queue.outgoing[idx];
+  auto& rng       = globals.state.rngs[idx];
+  auto  rn        = rand2f(rng);
+  auto  rnl       = rand1f(rng);
+
+  auto incoming = globals.state.path.rays[idx].d;
+  auto position = globals.state.path.rays[idx].o;
+  if (incoming == vec3f{0, 0, 0}) {  // otherwise use ray direction
+    incoming = sample_transparent(
+        color, ior, roughness, normal, outgoing, rnl, rn);
+  }
+
+  if (incoming == vec3f{0, 0, 0}) {
+    globals.state.path.weights[idx] = {0, 0, 0};  // terminate
+    return;
+  }
+
+  auto bsdfcos = eval_transparent(
+      color, ior, roughness, normal, outgoing, incoming);
+  auto bsdfcos_pdf = sample_tranparent_pdf(
+      color, ior, roughness, normal, outgoing, incoming);
+  auto lights_pdf = sample_lights_pdf(
+      globals.scene, globals.bvh, globals.lights, position, incoming);
+
+  globals.state.path.weights[idx] *= bsdfcos /
+                                     (0.5f * bsdfcos_pdf + 0.5f * lights_pdf);
+
+  eval_material_epilogue(material_type::transparent, idx, normal, outgoing,
+      incoming, globals.state.path.weights[idx]);
+
+  globals.state.path.rays[idx] = {position, incoming};
+}
+
+extern "C" __global__ void eval_refractive_kernel(int num_materials) {
+  int mat_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (mat_idx >= num_materials) {
+    return;
+  }
+
+  auto& material_queue = globals.state.material_queue;
+  int   queue_size     = globals.state.width * globals.state.height;
+  int   offset         = 4;
+  int   queue_idx      = offset * queue_size + mat_idx;
+  int   idx            = material_queue.indices[queue_idx];
+
+  auto  color     = material_queue.color[idx];
+  auto  ior       = material_queue.ior[idx];
+  auto  roughness = material_queue.roughness[idx];
+  auto  normal    = material_queue.normal[idx];
+  auto  outgoing  = material_queue.outgoing[idx];
+  auto& rng       = globals.state.rngs[idx];
+  auto  rn        = rand2f(rng);
+  auto  rnl       = rand1f(rng);
+
+  auto incoming = globals.state.path.rays[idx].d;
+  auto position = globals.state.path.rays[idx].o;
+  if (incoming == vec3f{0, 0, 0}) {  // otherwise use ray direction
+    incoming = sample_refractive(
+        color, ior, roughness, normal, outgoing, rnl, rn);
+  }
+
+  if (incoming == vec3f{0, 0, 0}) {
+    globals.state.path.weights[idx] = {0, 0, 0};  // terminate
+    return;
+  }
+
+  auto bsdfcos = eval_refractive(
+      color, ior, roughness, normal, outgoing, incoming);
+  auto bsdfcos_pdf = sample_refractive_pdf(
+      color, ior, roughness, normal, outgoing, incoming);
+  auto lights_pdf = sample_lights_pdf(
+      globals.scene, globals.bvh, globals.lights, position, incoming);
+
+  globals.state.path.weights[idx] *= bsdfcos /
+                                     (0.5f * bsdfcos_pdf + 0.5f * lights_pdf);
+
+  eval_material_epilogue(material_type::refractive, idx, normal, outgoing,
+      incoming, globals.state.path.weights[idx]);
+
+  globals.state.path.rays[idx] = {position, incoming};
+}
+
+extern "C" __global__ void eval_gltfpbr_kernel(int num_materials) {
+  int mat_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (mat_idx >= num_materials) {
+    return;
+  }
+
+  auto& material_queue = globals.state.material_queue;
+  int   queue_size     = globals.state.width * globals.state.height;
+  int   offset         = 5;
+  int   queue_idx      = offset * queue_size + mat_idx;
+  int   idx            = material_queue.indices[queue_idx];
+
+  auto  color     = material_queue.color[idx];
+  auto  ior       = material_queue.ior[idx];
+  auto  roughness = material_queue.roughness[idx];
+  auto  metallic  = material_queue.metallic[idx];
+  auto  normal    = material_queue.normal[idx];
+  auto  outgoing  = material_queue.outgoing[idx];
+  auto& rng       = globals.state.rngs[idx];
+  auto  rn        = rand2f(rng);
+  auto  rnl       = rand1f(rng);
+
+  auto incoming = globals.state.path.rays[idx].d;
+  auto position = globals.state.path.rays[idx].o;
+  if (incoming == vec3f{0, 0, 0}) {  // otherwise use ray direction
+    incoming = sample_gltfpbr(
+        color, ior, roughness, metallic, normal, outgoing, rnl, rn);
+  }
+
+  if (incoming == vec3f{0, 0, 0}) {
+    globals.state.path.weights[idx] = {0, 0, 0};  // terminate
+    return;
+  }
+
+  auto bsdfcos = eval_gltfpbr(
+      color, ior, roughness, metallic, normal, outgoing, incoming);
+  auto bsdfcos_pdf = sample_gltfpbr_pdf(
+      color, ior, roughness, metallic, normal, outgoing, incoming);
+  auto lights_pdf = sample_lights_pdf(
+      globals.scene, globals.bvh, globals.lights, position, incoming);
+
+  globals.state.path.weights[idx] *= bsdfcos /
+                                     (0.5f * bsdfcos_pdf + 0.5f * lights_pdf);
+
+  eval_material_epilogue(material_type::gltfpbr, idx, normal, outgoing,
+      incoming, globals.state.path.weights[idx]);
+
+  globals.state.path.rays[idx] = {position, incoming};
+}
+
 // logic phase of the wavefront algorithm
 // we generate a new ray if its the first invocation, or if the
 // last ray terminated due to a miss/max depth reached/opacity/rr
 extern "C" __global__ void trace_pixel_logic(
-    int* num_samples_done, int* sample_queue_front) {
+    int* num_samples_done, int* sample_queue_front, int* mat_queue_fronts) {
   // pixel index
   uint2 ij;
   ij.x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1774,7 +2339,8 @@ extern "C" __global__ void trace_pixel_logic(
   }
 
   trace_sample(globals.state, globals.scene, globals.bvh, globals.lights, ij.x,
-      ij.y, globals.params, num_samples_done, sample_queue_front);
+      ij.y, globals.params, num_samples_done, sample_queue_front,
+      mat_queue_fronts);
 }
 
 // extend phase of the wavefront algorithm
@@ -1797,7 +2363,12 @@ extern "C" __global__ void trace_pixel_extend() {
     return;
   }
 
-  auto ray          = globals.state.path.rays[idx];
+  auto ray = globals.state.path.rays[idx];
+  if (ray.d == vec3f{0, 0, 0}) {
+    globals.state.intersection.hit[idx] = false;
+    return;
+  }
+
   auto intersection = intersect_scene(globals.bvh, globals.scene, ray, false);
 
   auto& intersections         = globals.state.intersection;
@@ -1883,11 +2454,17 @@ extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
 
   int* num_samples_done;
   int* sample_queue_front;
+  int* mat_queue_fronts_gpu;
+
   cudaMalloc(&num_samples_done, sizeof(int));
   cudaMalloc(&sample_queue_front, sizeof(int));
+  cudaMalloc(&mat_queue_fronts_gpu, sizeof(int) * 6);
+
   cudaMemset(num_samples_done, 0, sizeof(int));
   cudaMemset(sample_queue_front, 0, sizeof(int));
+
   int num_samples_done_cpu = 0;
+  int mat_queue_fronts[6]  = {0, 0, 0, 0, 0, 0};
 
   int width  = globals_cpu.state.width;
   int height = globals_cpu.state.height;
@@ -1907,23 +2484,71 @@ extern "C" void cutrace_samples(CUdeviceptr trace_globals) {
   }
 
   while (num_samples_done_cpu < target_samples) {
+    cudaMemset(mat_queue_fronts_gpu, 0, sizeof(int) * 6);
+
     trace_pixel_extend<<<gridSize, blockSize>>>();
 
     trace_pixel_logic<<<gridSize, blockSize>>>(
-        num_samples_done, sample_queue_front);
+        num_samples_done, sample_queue_front, mat_queue_fronts_gpu);
+
+    cudaMemcpy(mat_queue_fronts, mat_queue_fronts_gpu, sizeof(int) * 6,
+        cudaMemcpyDeviceToHost);
+
+    auto& material_queue = globals_cpu.state.material_queue;
+    int   mat_block_size = 256;
+    if (mat_queue_fronts[0] > 0) {
+      int num_materials = mat_queue_fronts[0];
+      int num_blocks    = (num_materials + mat_block_size - 1) / mat_block_size;
+      eval_matte_kernel<<<num_blocks, mat_block_size>>>(num_materials);
+    }
+
+    if (mat_queue_fronts[1] > 0) {
+      int num_materials = mat_queue_fronts[1];
+      int num_blocks    = (num_materials + mat_block_size - 1) / mat_block_size;
+      eval_glossy_kernel<<<num_blocks, mat_block_size>>>(num_materials);
+    }
+
+    if (mat_queue_fronts[2] > 0) {
+      int num_materials = mat_queue_fronts[2];
+      int num_blocks    = (num_materials + mat_block_size - 1) / mat_block_size;
+      eval_reflective_kernel<<<num_blocks, mat_block_size>>>(num_materials);
+    }
+
+    if (mat_queue_fronts[3] > 0) {
+      int num_materials = mat_queue_fronts[3];
+      int num_blocks    = (num_materials + mat_block_size - 1) / mat_block_size;
+      eval_transparent_kernel<<<num_blocks, mat_block_size>>>(num_materials);
+    }
+
+    if (mat_queue_fronts[4] > 0) {
+      int num_materials = mat_queue_fronts[4];
+      int num_blocks    = (num_materials + mat_block_size - 1) / mat_block_size;
+      eval_refractive_kernel<<<num_blocks, mat_block_size>>>(num_materials);
+    }
+
+    if (mat_queue_fronts[5] > 0) {
+      int num_materials = mat_queue_fronts[5];
+      int num_blocks    = (num_materials + mat_block_size - 1) / mat_block_size;
+      eval_gltfpbr_kernel<<<num_blocks, mat_block_size>>>(num_materials);
+    }
 
     cudaMemcpy(&num_samples_done_cpu, num_samples_done, sizeof(int),
         cudaMemcpyDeviceToHost);
 
-    // printf("iteration %d, num samples done: %d/%d, %f\n", cur++,
-    //     num_samples_done_cpu, target_samples,
-    //     (float)num_samples_done_cpu / target_samples);
+    printf("iteration %d, num samples done: %d/%d, %f\n", cur++,
+        num_samples_done_cpu, target_samples,
+        (float)num_samples_done_cpu / target_samples);
+
+    printf("mat queue: %d %d %d %d %d %d\n", mat_queue_fronts[0],
+        mat_queue_fronts[1], mat_queue_fronts[2], mat_queue_fronts[3],
+        mat_queue_fronts[4], mat_queue_fronts[5]);
   }
 
   trace_pixel_epilogue<<<gridSize, blockSize>>>();
 
   cudaFree(num_samples_done);
   cudaFree(sample_queue_front);
+  cudaFree(mat_queue_fronts_gpu);
 }
 
 }  // namespace yocto
