@@ -1,51 +1,26 @@
-# CMU 15618 Final Project
+# CMU 15618 Final Project: Wavefront Path Tracing
 
-Adatped from Yocto/GL.
+[Project site](https://zymk9.github.io/cmu15618_project/).
 
-Our files to work on:
-- `yocto/cuda_trace.{h,cpp,cu}`
+This repo contains the course project for CMU 15-618: Parallel Computer Architecture and Programming Fall 2023. We adatped a CPU path tracer from [Yocto/GL](https://github.com/xelatihy/yocto-gl) to CUDA and extended it with the wavefront design and the wide BVH from the following papers:
 
-Main source of adaptation:
-- `yocto/yocto_trace.{h,cpp}`: path tracing of surfaces and hairs supporting
-  area and environment illumination, microfacet GGX and subsurface scattering,
-  multiple importance sampling
-- `yocto/yocto_cutrace.{h,cpp,cu}`: CUDA/OptiX version.
+- [Megakernels Considered Harmful: Wavefront Path Tracing on GPUs](https://research.nvidia.com/sites/default/files/pubs/2013-07_Megakernels-Considered-Harmful/laine2013hpg_paper.pdf)
+- [Efficient Incoherent Ray Traversal on GPUs Through Compressed Wide BVHs](https://research.nvidia.com/publication/2017-07_efficient-incoherent-ray-traversal-gpus-through-compressed-wide-bvhs)
 
-
-Main demo:
-- `apps/ytrace.cpp`: offline and interactive scene rendering
-- `apps/ycutrace.cpp`: offline and interactive scene rendering with CUDA
-
-
-## TODO
-Before milestone: Adapt the CPU/OptiX version to pure CUDA, using megakernel design.
-
-- [ ] Modify the CUDA BVH intersection part (currently using OptiX internal implementation). Adapt from the CPU version.
-- [ ] Remove all the OptiX configuration code.
-- [ ] Add our own CUDA entry kernel and host-side dispatch code.
-- [ ] (Maybe?) Optimize CUDA device functions.
+We compare the performance of our wavefront path tracer, the original megakernel version in CUDA (without using OptiX), and the multithreaded CPU version. Our implementation achieves a speedup of 1.02x - 1.79x comparing to the megakernel CUDA version, and 1.49x - 8.20x comparing to running on a 16-core CPU.
 
 
 ## Compilation
+First, check the original [repo](https://github.com/xelatihy/yocto-gl) for requirements. By default, `cmake ..` will generate configuration for the wavefront version. To generate the megakernel version without OptiX, run
+```bash
+cmake -DWAVEFRONT=OFF ..
+```
 
-This library requires a C++17 compiler and is know to compiled on
-OsX (Xcode >= 11), Windows (MSVC >= 2019) and Linux (gcc >= 9, clang >= 9).
+To generate the original CUDA version using OptiX, run
+```bash
+cmake -DWAVEFRONT=OFF -DCUSTOM_CUDA=OFF ..
+```
 
-You can build the example applications using CMake with
-`mkdir build; cd build; cmake ..; cmake --build .`
+The target names are `wavefront_trace`, `cuda_trace`, and `ycutrace`, respectively. 
 
-Yocto/GL required dependencies are included in the distribution and do not
-need to be installed separately.
-
-Yocto/GL optionally supports building OpenGL demos. OpenGL support is enabled
-by defining the cmake option `YOCTO_OPENGL`. 
-OpenGL dependencies are included in this repo.
-
-Yocto/GL optionally supports the use of Intel's Embree for ray casting.
-See the main CMake file for how to link to it. Embree support is enabled by
-defining the cmake option `YOCTO_EMBREE`. Embree needs to be installed separately.
-
-Yocto/GL optionally supports the use of Intel's Open Image Denoise for denoising.
-See the main CMake file for how to link to it. Open Image Denoise support
-is enabled by defining the cmake option `YOCTO_DENOISE`.
-OIDN needs to be installed separately.
+To use the wide BVH, specify `--wbvh` in the command line. To use the three-stage (logic, material, ray cast) wavefront pipeline instead of the two-stage one (logic, ray cast), add `--matstage` to the command for `wavefront_trace`.
